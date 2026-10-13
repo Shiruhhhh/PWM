@@ -99,3 +99,14 @@ Resolved as middle ground: enables #9 automatic rotation without putting CA key 
 
 ### 6. Idle/lock timeout — addendum
 Confirmed configurable in app settings (not a hardcoded value).
+
+### 16. CRYPTO_SPEC.md §5 wrappedByPassword key — bug found during Phase 1 implementation
+`wrappedByPassword = wrap(vaultKey, key=HKDF(masterKey, "PWM-vault-key-v1"))` as literally
+written wraps `vaultKey` under itself (that HKDF info string is the same one used to derive
+`vaultKey` in §1) — circular, you'd need `vaultKey` to unwrap `vaultKey`.
+
+- [x] Fix: derive a distinct wrapping key under its own domain-separated info string,
+  `HKDF(masterKey, "PWM-vault-wrap-key-v1")`, used only to wrap/unwrap `vaultKey` for the
+  password path. `vaultKey` itself stays independent and never rotates (matches §7's own
+  statement that only its wrapping changes on password change). Implemented in
+  `packages/core/src/kdf/hkdf.ts` as `deriveVaultWrapKey` / `VAULT_WRAP_KEY_INFO`.

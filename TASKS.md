@@ -22,14 +22,14 @@ This file is the entry point for implementation. Read it fully, then read every 
 
 Follow `CRYPTO_SPEC.md` exactly — exact algorithms, exact parameters, exact domain-separation strings.
 
-- [ ] Argon2id wrapper (native bindings, params from spec: 64 MiB, 3 iterations, parallelism 4, 32-byte output).
-- [ ] HKDF-SHA256 split into `vaultKey` / `authKey` using the exact `info` strings in the spec.
-- [ ] AES-256-GCM encrypt/decrypt for vault blob, with the exact wire format (`version || nonce || ciphertext || authTag`) and AAD (`userId || blobFormatVersion`).
-- [ ] Vault key wrapping/unwrapping for both password-derived key and recovery key paths.
-- [ ] Vault blob JSON schema + `zod` validation, versioned per spec.
-- [ ] Recovery key generation (24-word mnemonic or base58, cryptographically random 32 bytes).
-- [ ] Shared TypeScript types for API request/response payloads (used by both server and mobile).
-- [ ] **Tests first-class citizen here**: known-answer tests, round-trip tests, negative/tamper tests, domain-separation test — per `TESTING.md`. Do not move to Phase 2 until these pass and you're confident in this layer — everything else depends on it being correct.
+- [x] Argon2id wrapper (native bindings, params from spec: 64 MiB, 3 iterations, parallelism 4, 32-byte output).
+- [x] HKDF-SHA256 split into `vaultKey` / `authKey` using the exact `info` strings in the spec. (Also added a third `vaultWrapKey` subkey — see `docs/DECISIONS.md` #16, fixes a circular-key bug found in §5 as literally written.)
+- [x] AES-256-GCM encrypt/decrypt for vault blob, with the exact wire format (`version || nonce || ciphertext || authTag`) and AAD (`userId || blobFormatVersion`).
+- [x] Vault key wrapping/unwrapping for both password-derived key and recovery key paths.
+- [x] Vault blob JSON schema + `zod` validation, versioned per spec.
+- [x] Recovery key generation (24-word mnemonic, cryptographically random 32 bytes).
+- [x] Shared TypeScript types for API request/response payloads (used by both server and mobile).
+- [x] **Tests first-class citizen here**: known-answer tests, round-trip tests, negative/tamper tests, domain-separation test — per `TESTING.md`. 48/48 passing across 8 test files.
 
 ## Phase 2 — packages/server (Node/Fastify backend)
 
