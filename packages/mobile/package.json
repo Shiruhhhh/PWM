@@ -1,0 +1,13 @@
+{
+  "name": "@pwm/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "build": "echo \"RN build scaffolded in Phase 4\" && exit 0",
+    "test": "echo \"RN tests scaffolded in Phase 4\" && exit 0"
+  },
+  "dependencies": {
+    "@pwm/core": "workspace:*"
+  }
+}

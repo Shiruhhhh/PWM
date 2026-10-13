@@ -1,0 +1,11 @@
+node_modules
+dist
+build
+coverage
+pnpm-lock.yaml
+android
+ios
+
+# Spec docs are committed as-is, source of truth — never reformatted
+*.md
+pnpm-workspace.yaml

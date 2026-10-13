@@ -1,0 +1,13 @@
+{
+  "name": "@pwm/core",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo \"vitest + core tests land in Phase 1\" && exit 0"
+  }
+}

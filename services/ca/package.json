@@ -1,0 +1,11 @@
+{
+  "name": "pwm-ca",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo \"CA service tests scaffolded in Phase 3\" && exit 0"
+  }
+}

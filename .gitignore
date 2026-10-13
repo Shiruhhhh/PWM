@@ -1,0 +1,28 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+
+.env
+.env.*
+!.env.example
+
+*.key
+*.p12
+*.pem
+*.crt
+*.csr
+*.srl
+
+.DS_Store
+*.tsbuildinfo
+
+# Android (packages/mobile)
+packages/mobile/android/app/build/
+packages/mobile/android/.gradle/
+packages/mobile/android/local.properties
+packages/mobile/ios/Pods/
+
+# CA service flat-file storage, never committed
+services/ca/data/
