@@ -27,7 +27,8 @@ CREATE TABLE sessions (
   token        TEXT PRIMARY KEY,                         -- opaque random token, not JWT (allows server-side revocation)
   user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-  expires_at   TIMESTAMPTZ NOT NULL
+  expires_at   TIMESTAMPTZ NOT NULL,
+  last_used_at TIMESTAMPTZ NOT NULL DEFAULT now()         -- bumped on every authenticated request, rolling 90-day TTL (see API_SPEC.md)
 );
 CREATE INDEX idx_sessions_user_id ON sessions(user_id);
 CREATE INDEX idx_sessions_expires_at ON sessions(expires_at);   -- for periodic cleanup job

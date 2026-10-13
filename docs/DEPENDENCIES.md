@@ -18,6 +18,7 @@ Pin exact versions at implementation time, check for maintenance status/known CV
 - `argon2` — same package as core, used for server-side second-pass hashing of `authHash`.
 - `@fastify/rate-limit` — per-IP/per-username throttling on `/login`, `/register`, `/login/params`, `/recovery/wrapped-key`.
 - `pino` (bundled with Fastify) — structured logging, feeds into decision #11 (basic log review/monitoring).
+- `@electric-sql/pglite` + `@electric-sql/pglite-socket` (dev-only) — WASM Postgres exposed over a real TCP socket for integration tests, per `TESTING.md`'s "SQLite in-memory or ephemeral Postgres container" — gives real Postgres semantics (JSONB, UUID, BYTEA) without Docker, so Prisma connects via a normal `DATABASE_URL` with no code changes. CI/production integration tests still target a real Postgres container.
 
 ## packages/mobile (React Native, Android)
 

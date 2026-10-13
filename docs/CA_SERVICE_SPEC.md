@@ -32,7 +32,16 @@ Body: `{ fingerprint }`
 
 ### `GET /crl`
 - Returns current `crl.json` contents.
-- pwm-app's Caddy polls this periodically (e.g. every 15 min) to refresh its own revoked-cert rejection list — Caddy's `client_auth` can be configured to check against a CRL file it reads locally; pwm-app writes the fetched CRL to disk for Caddy to consume.
+- pwm-app polls this periodically (e.g. every 15 min) to refresh its own revoked-cert rejection list.
+
+**Correction found during Phase 2 implementation (see `docs/DECISIONS.md` #17):** stock
+Caddy has no built-in CRL/revocation directive in `client_auth` — it only verifies a
+cert chains to a trusted CA, not whether that cert was later revoked. Revocation
+checking happens at the **application layer** instead: pwm-app fetches and caches this
+CRL, and a Fastify preHandler on every session-required route checks the presented
+client cert's fingerprint against it, rejecting with 401 if revoked. Caddy's
+`client_auth` config stays `require_and_verify` (trusted-CA check only) — see
+`infra/Caddyfile`.
 
 ### `GET /health`
 - Trivial liveness check, no auth needed beyond network-level isolation (nothing sensitive returned — just `{ status: "ok" }`).

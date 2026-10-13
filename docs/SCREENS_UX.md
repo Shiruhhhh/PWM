@@ -76,12 +76,13 @@ Two-phase flow, not a single screen:
 
 ## App lifecycle / lock flow
 
-1. Cold start: check encrypted cache for wrapped vault blob.
-   - Present + biometric enrolled → BiometricPrompt → unwrap vaultKey → decrypt cached blob → show vault, background sync check.
-   - No cache or biometric declined/fails → master password screen.
-2. App backgrounded → start idle timer (configurable).
-3. Timer expires or app force-closed → clear in-memory `vaultStore`. Next resume requires unlock.
-4. On unlock success → `GET /vault`, compare revision, merge/pull/push per sync logic below.
+1. Cold start: check encrypted cache for wrapped vault blob + stored session token.
+   - Present + biometric enrolled → BiometricPrompt → unwrap vaultKey → decrypt cached blob → resume stored session (no `/login` call needed, session is rolling-TTL per API_SPEC.md) → show vault, background sync check.
+   - No cache, or biometric declined/fails → master password screen (full `/login`, new session issued).
+2. **Biometric failure fallback**: track consecutive biometric failures in memory (not persisted). After 3 consecutive failures, skip further biometric retries and fall straight to master password screen for that unlock attempt. Counter resets on any successful unlock (biometric or password).
+3. App backgrounded → start idle timer (configurable).
+4. Timer expires or app force-closed → clear in-memory `vaultStore`. Next resume requires unlock (biometric-first per step 1, not automatically master password).
+5. On unlock success → `GET /vault`, compare revision, merge/pull/push per sync logic below. Every successful authenticated request also rolls the server session TTL forward (server-side behavior, see API_SPEC.md) — no separate client action needed.
 
 ## Sync logic (client side)
 

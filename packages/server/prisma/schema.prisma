@@ -1,0 +1,72 @@
+// PWM server Prisma schema — exact per docs/DB_SCHEMA.md, do not diverge
+// without updating that doc first.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                       String   @id @default(uuid()) @db.Uuid
+  username                 String   @unique
+  clientSalt               Bytes    @map("client_salt")
+  kdfParams                Json     @map("kdf_params")
+  serverSalt               Bytes    @map("server_salt")
+  authHash                 Bytes    @map("auth_hash")
+  wrappedVaultKeyPassword  Bytes    @map("wrapped_vault_key_password")
+  wrappedVaultKeyRecovery  Bytes    @map("wrapped_vault_key_recovery")
+  createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  sessions    Session[]
+  vaultBlob   VaultBlob?
+  clientCerts ClientCert[]
+
+  @@map("users")
+}
+
+model VaultBlob {
+  userId             String   @id @map("user_id") @db.Uuid
+  encryptedBlob      Bytes    @map("encrypted_blob")
+  revision           Int      @default(0)
+  blobFormatVersion  Int      @default(1) @map("blob_format_version")
+  updatedAt          DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("vault_blobs")
+}
+
+model Session {
+  token      String   @id
+  userId     String   @map("user_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz
+  lastUsedAt DateTime @default(now()) @map("last_used_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model ClientCert {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  certCn     String    @map("cert_cn")
+  fingerprint String   @unique
+  issuedAt   DateTime  @map("issued_at") @db.Timestamptz
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz
+  revoked    Boolean   @default(false)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([fingerprint])
+  @@map("client_certs")
+}

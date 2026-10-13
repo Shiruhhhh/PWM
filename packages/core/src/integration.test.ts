@@ -14,7 +14,12 @@ import { parseVaultBlob, VAULT_BLOB_FORMAT_VERSION } from './schema/vaultBlob.js
  */
 describe('crypto-core lifecycle', () => {
   it('registration + password-unlock + recovery-unlock all reach the same plaintext vault', async () => {
-    const userId = 'user-e2e-test';
+    // username is chosen client-side before registration, so vaultKey
+    // wrapping (which happens pre-registration, per SCREENS_UX.md) uses
+    // it as AAD. userId is server-assigned at registration and only
+    // used afterwards, for the vault blob's own AAD.
+    const username = 'alice-e2e-test';
+    const userId = 'server-assigned-user-id';
     const clientSalt = new Uint8Array(16).fill(0x01);
     const password = "it's a secret to everybody";
 
@@ -24,8 +29,8 @@ describe('crypto-core lifecycle', () => {
     expect(authKey.length).toBe(32);
 
     const recoveryKey = generateRecoveryKey();
-    const wrappedByPassword = wrapVaultKey(vaultKey, vaultWrapKey, userId);
-    const wrappedByRecovery = wrapVaultKey(vaultKey, recoveryKey, userId);
+    const wrappedByPassword = wrapVaultKey(vaultKey, vaultWrapKey, username);
+    const wrappedByRecovery = wrapVaultKey(vaultKey, recoveryKey, username);
 
     const blob = parseVaultBlob({
       version: VAULT_BLOB_FORMAT_VERSION,
@@ -49,14 +54,18 @@ describe('crypto-core lifecycle', () => {
     // Password-unlock path
     const masterKey2 = await deriveMasterKey(password, clientSalt);
     const { vaultWrapKey: vaultWrapKeyViaPassword } = splitMasterKey(masterKey2);
-    const unwrappedViaPassword = unwrapVaultKey(wrappedByPassword, vaultWrapKeyViaPassword, userId);
+    const unwrappedViaPassword = unwrapVaultKey(
+      wrappedByPassword,
+      vaultWrapKeyViaPassword,
+      username,
+    );
     const decryptedViaPassword = decrypt(unwrappedViaPassword, encryptedBlob, aad);
     expect(parseVaultBlob(JSON.parse(new TextDecoder().decode(decryptedViaPassword)))).toEqual(
       blob,
     );
 
     // Recovery-unlock path
-    const unwrappedViaRecovery = unwrapVaultKey(wrappedByRecovery, recoveryKey, userId);
+    const unwrappedViaRecovery = unwrapVaultKey(wrappedByRecovery, recoveryKey, username);
     const decryptedViaRecovery = decrypt(unwrappedViaRecovery, encryptedBlob, aad);
     expect(parseVaultBlob(JSON.parse(new TextDecoder().decode(decryptedViaRecovery)))).toEqual(
       blob,

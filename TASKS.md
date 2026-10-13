@@ -35,16 +35,16 @@ Follow `CRYPTO_SPEC.md` exactly — exact algorithms, exact parameters, exact do
 
 Follow `API_SPEC.md` and `DB_SCHEMA.md` exactly.
 
-- [ ] Prisma schema from `DB_SCHEMA.md`, initial migration.
-- [ ] Fastify app skeleton, `zod`-based schema validation via `fastify-type-provider-zod`.
-- [ ] Implement endpoints in this order: `GET /login/params`, `POST /register`, `POST /login`, `GET /vault`, `PUT /vault`, `POST /password-change`, `GET /recovery/wrapped-key`, `POST /cert/renew`, `POST /cert/revoke`.
-- [ ] Session handling: opaque tokens, server-side session table, expiry.
-- [ ] Rate limiting (`@fastify/rate-limit`) on the pre-session endpoints per spec.
-- [ ] Generic error responses — no username enumeration, no leaking which field failed on auth errors.
-- [ ] `pino` structured logging per `MONITORING.md` — log the specified events, never log secrets.
-- [ ] Integration tests per `TESTING.md` — full request/response cycles against an ephemeral test DB.
-- [ ] `Dockerfile` + `docker-compose.yml` (node-app + caddy + postgres) per `DEPLOY.md`.
-- [ ] Caddy config implementing mTLS `require_and_verify` per earlier design discussion (not yet its own file — write it as `infra/Caddyfile`, reference `PROXMOX_NETWORK.md` for port/IP context).
+- [x] Prisma schema from `DB_SCHEMA.md`, initial migration. (`last_used_at` column added to match API_SPEC.md's rolling-TTL session model — see `docs/DB_SCHEMA.md` and `docs/DECISIONS.md`.)
+- [x] Fastify app skeleton, `zod`-based schema validation via `fastify-type-provider-zod`.
+- [x] Implement endpoints in this order: `GET /login/params`, `POST /register`, `POST /login`, `GET /vault`, `PUT /vault`, `POST /password-change`, `GET /recovery/wrapped-key`, `POST /cert/renew`, `POST /cert/revoke`. (`/cert/renew` and `/cert/revoke` call an injectable `CaClient` interface — real implementation lands in Phase 3 once `pwm-ca` exists.)
+- [x] Session handling: opaque tokens, server-side session table, expiry. Rolling 90-day TTL per `API_SPEC.md`.
+- [x] Rate limiting (`@fastify/rate-limit`) on the pre-session endpoints per spec.
+- [x] Generic error responses — no username enumeration, no leaking which field failed on auth errors. Applied consistently to `/login/params`, `/login`, and `/recovery/wrapped-key` (the last one wasn't explicit in the spec but extended for consistency, see `docs/DECISIONS.md`).
+- [x] `pino` structured logging per `MONITORING.md` — log the specified events, never log secrets.
+- [x] Integration tests per `TESTING.md` — full request/response cycles against an ephemeral test DB. Used PGlite (WASM Postgres over a real socket) instead of Docker Postgres for local/CI runs, since no Docker was available — see `docs/DEPENDENCIES.md`. 24 tests passing across 2 files.
+- [x] `Dockerfile` + `docker-compose.yml` (node-app + caddy + postgres) per `DEPLOY.md`.
+- [x] Caddy config implementing mTLS `require_and_verify`, written as `infra/Caddyfile`. **Correction**: stock Caddy has no CRL/revocation directive (verified via web search) — revocation checking moved to the app layer instead (`requireSession` preHandler checks a forwarded `Client-Cert` header against the CRL + DB). See `docs/CA_SERVICE_SPEC.md` and `docs/DECISIONS.md` #17.
 
 ## Phase 3 — services/ca (CA signing service)
 

@@ -110,3 +110,34 @@ written wraps `vaultKey` under itself (that HKDF info string is the same one use
   password path. `vaultKey` itself stays independent and never rotates (matches §7's own
   statement that only its wrapping changes on password change). Implemented in
   `packages/core/src/kdf/hkdf.ts` as `deriveVaultWrapKey` / `VAULT_WRAP_KEY_INFO`.
+
+**Follow-up bug found during Phase 2 implementation**: the wrap/unwrap AAD (defense in
+depth, not in CRYPTO_SPEC.md's original text) was initially bound to `userId`. But
+`SCREENS_UX.md`'s setup flow wraps `vaultKey` client-side *before* calling `POST
+/register` — no server-assigned `userId` exists yet at that point, only the
+client-chosen `username`. Ordering conflict; `userId`-as-AAD is impossible at wrap time
+during registration.
+
+- [x] Fix: wrap/unwrap AAD is `username` (UTF-8 bytes), not `userId`. Implemented in
+  `packages/core/src/crypto/keyWrap.ts`. The vault blob's own AAD (§3, `userId ||
+  blobFormatVersion`) is unrelated and unaffected — that encryption happens after
+  registration, once `userId` is known. Both changes documented in `docs/CRYPTO_SPEC.md`
+  §5's addenda.
+
+### 17. CA_SERVICE_SPEC.md's Caddy-CRL assumption — incorrect, found during Phase 2 implementation
+`CA_SERVICE_SPEC.md`'s `GET /crl` section originally said "Caddy's `client_auth` can be
+configured to check against a CRL file it reads locally." Verified via web search:
+**stock Caddy has no such directive.** `client_auth` with `require_and_verify` only
+checks that a presented cert chains to a trusted CA — it has no revocation/CRL support
+built in. A third-party plugin (`caddy-revocation-validator`) adds this but requires a
+custom `xcaddy` build instead of the stock Caddy image.
+
+- [x] Fix: move revocation checking to the application layer instead of the TLS layer.
+  pwm-app polls `GET /crl` from pwm-ca and caches the result; a Fastify preHandler on
+  every session-required route checks the presented client cert's fingerprint against
+  it (and against `client_certs.revoked` in the DB) and rejects with 401 if revoked.
+  Caddy's `client_auth` stays `require_and_verify` (trusted-CA check only) — a revoked
+  cert still passes the TLS handshake and gets rejected one layer up, by the app.
+  Chosen over the xcaddy custom-build route to avoid adding Caddy build complexity for
+  a 2-user personal deployment. Implemented in `packages/server/src/lib/*` (Phase 2),
+  documented in `docs/CA_SERVICE_SPEC.md` and `docs/MONITORING.md`.

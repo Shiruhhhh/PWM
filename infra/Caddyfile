@@ -1,0 +1,35 @@
+# PWM Caddy config — mTLS termination for pwm-app (192.168.1.10), per
+# docs/PROXMOX_NETWORK.md and docs/API_SPEC.md. Unauthenticated TLS
+# handshakes (no client cert / invalid cert — i.e. not signed by our CA)
+# are rejected here, before any request reaches the Fastify app.
+#
+# NOTE: stock Caddy's client_auth only verifies a cert chains to the
+# trusted CA — it has no CRL/revocation support. A *revoked* cert still
+# passes this check and gets rejected one layer up, by the app (see
+# docs/CA_SERVICE_SPEC.md and docs/DECISIONS.md #17).
+#
+# {$PWM_PUBLIC_HOST} must be set to the real DDNS hostname (see root
+# .env.example) — Caddy uses it to request/renew a Let's Encrypt cert.
+
+{$PWM_PUBLIC_HOST} {
+	tls {
+		client_auth {
+			mode require_and_verify
+			trusted_ca_cert_file /etc/pwm/ca.crt
+		}
+	}
+
+	reverse_proxy node-app:3000 {
+		# Forward the verified client cert (DER, base64, RFC 9440
+		# Client-Cert format) so the app can compute its fingerprint and
+		# check it against the CRL — Caddy only verifies the cert chains
+		# to our CA, it has no revocation support (see
+		# docs/CA_SERVICE_SPEC.md, docs/DECISIONS.md #17).
+		header_up Client-Cert :{tls_client_certificate_der_base64}:
+	}
+
+	log {
+		output file /var/log/caddy/pwm-access.log
+		format json
+	}
+}

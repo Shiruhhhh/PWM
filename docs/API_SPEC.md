@@ -8,7 +8,7 @@ All endpoints behind Caddy with mTLS `require_and_verify` — unauthenticated TL
 
 **vault_blobs**: user_id, encrypted_blob, revision(int), blob_format_version, updated_at
 
-**sessions**: token, user_id, expires_at
+**sessions**: token, user_id, created_at, expires_at, last_used_at
 
 **client_certs**: id, user_id, cert_cn, fingerprint, issued_at, expires_at, revoked(bool)
 
@@ -64,6 +64,13 @@ Body: `{ certId }`
 - Marks cert revoked in DB.
 - Pushes revocation to CA signing LXC's CRL.
 - Use case: "lost my phone" button in SettingsScreen.
+
+## Session TTL policy
+
+- Rolling 90-day TTL. Every authenticated request extends `expires_at` to `now() + 90 days` and bumps `last_used_at` — session only expires after 90 days of zero activity, not from a fixed login timestamp.
+- Session token stored device-side in the same Keystore-backed encrypted storage as the wrapped `vaultKey` (per SCREENS_UX.md). Biometric unlock decrypts both together — biometric success resumes the server session with no master password needed, as long as the stored session hasn't actually expired server-side.
+- Biometric failure handling (device-side, not server-side): after 3 consecutive biometric failures, app falls back to requiring master password entry (full `/login` call, new session issued). This is a client-side policy — see SCREENS_UX.md — the server has no concept of "biometric attempt count," it only ever sees either a still-valid session token or a fresh `/login`.
+- Manual revocation remains the kill switch for a lost/stolen device: `/cert/revoke` + a corresponding session-revoke (delete the session row) exposed via the "manage devices" UI in SettingsScreen.
 
 ## Rate limiting
 

@@ -34,6 +34,7 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @pwm/server exec prisma generate --schema=prisma/schema.prisma
       - run: pnpm run build
 
   test:
@@ -49,4 +50,5 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @pwm/server exec prisma generate --schema=prisma/schema.prisma
       - run: pnpm run test
