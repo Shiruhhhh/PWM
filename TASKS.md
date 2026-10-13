@@ -11,12 +11,12 @@ This file is the entry point for implementation. Read it fully, then read every 
 
 ## Phase 0 — repo scaffold
 
-- [ ] Initialize git repo, `pnpm-workspace.yaml`, root `package.json`, `.gitignore` (node_modules, .env, build artifacts, *.key, *.p12, *.pem — never allow cert/key material to be committed).
-- [ ] `LICENSE` (MIT).
-- [ ] `.env.example` at root and per-package as needed (per `DEPLOY.md`).
-- [ ] ESLint + Prettier config, shared across packages.
-- [ ] `.github/workflows/ci.yml` per `TESTING.md` / `DEPLOY.md` (lint, build check — tests added as each package gets them).
-- [ ] Verify `README.md`, `docs/THREAT_MODEL.md`, and all design docs already in `docs/` are committed as-is (don't rewrite them, they're the spec).
+- [x] Initialize git repo, `pnpm-workspace.yaml`, root `package.json`, `.gitignore` (node_modules, .env, build artifacts, *.key, *.p12, *.pem — never allow cert/key material to be committed).
+- [x] `LICENSE` (MIT).
+- [x] `.env.example` at root and per-package as needed (per `DEPLOY.md`).
+- [x] ESLint + Prettier config, shared across packages.
+- [x] `.github/workflows/ci.yml` per `TESTING.md` / `DEPLOY.md` (lint, build check — tests added as each package gets them).
+- [x] Verify `README.md`, `docs/THREAT_MODEL.md`, and all design docs already in `docs/` are committed as-is (don't rewrite them, they're the spec).
 
 ## Phase 1 — packages/core (crypto, do this first, get it right before anything depends on it)
 
