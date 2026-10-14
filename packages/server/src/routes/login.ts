@@ -74,6 +74,7 @@ export function registerLoginRoute(app: App): void {
         sessionToken: token,
         expiresAt: expiresAt.toISOString(),
         wrappedVaultKeyPassword: Buffer.from(user.wrappedVaultKeyPassword).toString('base64'),
+        userId: user.id,
       };
     },
   );

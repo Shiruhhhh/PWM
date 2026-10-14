@@ -180,3 +180,32 @@ A code review of `packages/core`/`packages/server`/`services/ca` found 7 issues.
   folded into the Node-side `crypto.createPublicKey` fix above; the remaining two each
   extract genuinely different structured data and can't be merged further without
   reintroducing fragile combined-text parsing.
+
+### 19. API_SPEC.md's `POST /login` response missing `userId` — bug found during Phase 4 implementation
+`CRYPTO_SPEC.md` §3 requires `userId` as part of the vault blob's AAD on every `GET /vault`
+decrypt. But `POST /login`'s response (`{ sessionToken, expiresAt, wrappedVaultKeyPassword }`)
+never included it — only `POST /register` returns `{ userId }`, a single one-time response.
+A returning user logging in on any device that didn't just locally register (app reinstall,
+second device, cache cleared) had no way to obtain their own `userId` to decrypt their vault.
+
+- [x] Fix: `POST /login`'s response now also includes `userId` (`packages/server/src/routes/login.ts`
+  — the handler already has `user.id` in scope at that point, trivial addition). Updated
+  `loginResponseSchema` in `packages/core/src/api/types.ts` and `docs/API_SPEC.md`.
+
+### 20. RecoveryScreen's flow couldn't complete — `/password-change` requires a session recovery doesn't have, found during Phase 4 implementation
+`SCREENS_UX.md`'s RecoveryScreen flow (forgot master password) unwraps `vaultKey` via the
+recovery key, then rewraps it under a new password and pushes the result. `API_SPEC.md`
+said this "reuses the normal `/password-change` flow server-side" — but `/password-change`
+has a `requireSession` preHandler, and recovery by definition has no active session (that's
+the whole point of recovery: the user can't log in). As written, recovery could never
+actually complete.
+
+- [x] Fix: added `POST /recovery/password-change` — no session required. The client already
+  proved possession of the recovery key by successfully unwrapping `wrappedVaultKeyRecovery`
+  locally before calling it; the server can't verify that happened, same trust model `GET
+  /recovery/wrapped-key` already accepts (recovery key never touches the server). Same
+  atomic DB transaction as `/password-change`, except it invalidates *all* sessions (no
+  "current" one to exempt) and returns a generic `401` for an unknown username rather than
+  a session error, keeping the anti-enumeration guarantee. Rate-limited the same as `GET
+  /recovery/wrapped-key`. Implemented in `packages/server/src/routes/recoveryPasswordChange.ts`,
+  documented in `docs/API_SPEC.md`.

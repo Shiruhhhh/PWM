@@ -44,6 +44,7 @@ export const loginResponseSchema = z.object({
   sessionToken: z.string(),
   expiresAt: z.string().datetime(),
   wrappedVaultKeyPassword: z.string(), // base64
+  userId: z.string().uuid(),
 });
 export type LoginResponse = z.infer<typeof loginResponseSchema>;
 
@@ -83,6 +84,19 @@ export const recoveryWrappedKeyResponseSchema = z.object({
   blobFormatVersion: z.number().int(),
 });
 export type RecoveryWrappedKeyResponse = z.infer<typeof recoveryWrappedKeyResponseSchema>;
+
+// POST /recovery/password-change
+// No session required -- recovery key itself is the credential (client
+// already proved possession locally by successfully unwrapping
+// wrappedVaultKeyRecovery before calling this). See docs/DECISIONS.md #20.
+export const recoveryPasswordChangeRequestSchema = z.object({
+  username: z.string(),
+  newClientSalt: z.string(), // base64
+  newKdfParams: kdfParamsSchema,
+  newAuthHash: z.string(), // base64
+  newWrappedVaultKeyPassword: z.string(), // base64
+});
+export type RecoveryPasswordChangeRequest = z.infer<typeof recoveryPasswordChangeRequestSchema>;
 
 // POST /cert/renew
 export const certRenewRequestSchema = z.object({

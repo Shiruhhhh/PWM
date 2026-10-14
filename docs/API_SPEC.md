@@ -30,7 +30,10 @@ Body: `{ username, authHash }`
 - Server recomputes `Argon2id(authHash, storedServerSalt)`, constant-time compare against stored hash.
 - Same generic failure response whether username missing or hash mismatch.
 - On match: creates session row.
-- Returns: `{ sessionToken, expiresAt, wrappedVaultKeyPassword }`
+- Returns: `{ sessionToken, expiresAt, wrappedVaultKeyPassword, userId }`. `userId` is needed by
+  the client for the vault blob's AAD (§3 of `CRYPTO_SPEC.md`) on every `GET /vault` decrypt —
+  `POST /register` only returns it once, which breaks login on any device that didn't just
+  register locally (reinstall, second device). See `docs/DECISIONS.md`.
 
 ### `GET /vault` (session required)
 - Returns: `{ encryptedBlob, revision, blobFormatVersion }`
@@ -50,7 +53,27 @@ Body: `{ newClientSalt, newKdfParams, newAuthHash, newWrappedVaultKeyPassword }`
 No session required — recovery key itself is the credential, never sent to server.
 - Hard rate-limited per-IP + per-username.
 - Returns: `{ wrappedVaultKeyRecovery, blobFormatVersion }`
-- Client unwraps `vaultKey` locally using recovery key, then proceeds through normal `/password-change` flow with a new master password. Server has no separate recovery-verification step — recovery is purely a local unwrap-then-rewrap operation.
+- Client unwraps `vaultKey` locally using recovery key, then proceeds through
+  `POST /recovery/password-change` (not the normal session-required `/password-change` —
+  see below) with a new master password. Server has no separate recovery-verification
+  step — recovery is purely a local unwrap-then-rewrap operation.
+
+### `POST /recovery/password-change`
+Body: `{ username, newClientSalt, newKdfParams, newAuthHash, newWrappedVaultKeyPassword }`
+- **No session required** — added per `docs/DECISIONS.md` #20. The normal
+  `POST /password-change` requires an active session, which recovery by definition doesn't
+  have (that's the whole point of recovery). The client already proved possession of the
+  recovery key by successfully unwrapping `wrappedVaultKeyRecovery` locally before calling
+  this — same trust model `GET /recovery/wrapped-key` already accepts (server can't verify
+  the unwrap happened, same as it can't verify anything else about a local-only operation).
+- Hard rate-limited per-IP + per-username, same as `GET /recovery/wrapped-key`.
+- Same atomic transaction as `/password-change` (new salt, kdf_params, auth hash, wrapped
+  vaultKey), except it invalidates **all** sessions for the account (no "current" session
+  to exempt).
+- Same generic response whether the username exists or not — can't be used to enumerate
+  accounts, per "Error handling conventions" below.
+- Returns: `204` on success, generic `401` (same shape as other auth failures) if the
+  username doesn't exist.
 
 ### `POST /cert/renew` (session required, current valid client cert)
 Body: `{ csr }`
@@ -75,7 +98,7 @@ Body: `{ certId }`
 ## Rate limiting
 
 Applied at Fastify middleware (`@fastify/rate-limit`) and/or Caddy:
-- `/login`, `/register`, `/login/params`, `/recovery/wrapped-key` — strict per-IP + per-username limits. These are the only pre-session-token endpoints, primary brute-force targets.
+- `/login`, `/register`, `/login/params`, `/recovery/wrapped-key`, `/recovery/password-change` — strict per-IP + per-username limits. These are the only pre-session-token endpoints, primary brute-force targets.
 
 ## Error handling conventions
 

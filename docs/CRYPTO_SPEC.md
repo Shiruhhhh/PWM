@@ -27,6 +27,11 @@ AES-256-GCM.
 - AAD: `userId || blobFormatVersion` — binds ciphertext to context.
 - Wire/storage format: `cryptoSchemeVersion(1 byte) || nonce(12 bytes) || ciphertext || authTag(16 bytes)`
 
+**Addendum found during Phase 4 implementation (see `docs/DECISIONS.md` #19):** the client
+needs `userId` on hand for this AAD on every decrypt, but `POST /login`'s response originally
+didn't return it (only `POST /register` did, once). Fixed by adding `userId` to `POST
+/login`'s response too — see `docs/API_SPEC.md`.
+
 ## 4. Vault blob format (pre-encryption, JSON)
 
 ```json

@@ -302,6 +302,69 @@ describe('full account lifecycle: register -> login -> vault -> password-change 
     expect(res.statusCode).toBe(200);
     expect(res.json().wrappedVaultKeyRecovery).toBeTruthy();
   });
+
+  it('POST /recovery/password-change resets credentials without a session, new password works after', async () => {
+    const recoveredKeyRes = await ctx.app.inject({
+      method: 'GET',
+      url: `/recovery/wrapped-key?username=${username}`,
+    });
+    const vaultKey = unwrapVaultKey(
+      Buffer.from(recoveredKeyRes.json().wrappedVaultKeyRecovery, 'base64'),
+      recoveryKey,
+      username,
+    );
+
+    const recoveryNewPassword = 'recovered-password-789';
+    const recoveryNewMasterKey = await deriveMasterKey(recoveryNewPassword, CLIENT_SALT);
+    const { authKey: recoveryNewAuthKey, vaultWrapKey: recoveryNewVaultWrapKey } =
+      splitMasterKey(recoveryNewMasterKey);
+    const recoveryNewWrappedByPassword = wrapVaultKey(vaultKey, recoveryNewVaultWrapKey, username);
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/recovery/password-change',
+      // Deliberately NO authorization header -- this is the whole point.
+      payload: {
+        username,
+        newClientSalt: Buffer.from(CLIENT_SALT).toString('base64'),
+        newKdfParams: KDF_PARAMS,
+        newAuthHash: Buffer.from(recoveryNewAuthKey).toString('base64'),
+        newWrappedVaultKeyPassword: Buffer.from(recoveryNewWrappedByPassword).toString('base64'),
+      },
+    });
+    expect(res.statusCode).toBe(204);
+
+    // The old session (from before recovery) is now invalidated too --
+    // recovery invalidates ALL sessions, there's no "current" to keep.
+    const oldSessionRes = await ctx.app.inject({
+      method: 'GET',
+      url: '/vault',
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    expect(oldSessionRes.statusCode).toBe(401);
+
+    const newLoginRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/login',
+      payload: { username, authHash: Buffer.from(recoveryNewAuthKey).toString('base64') },
+    });
+    expect(newLoginRes.statusCode).toBe(200);
+  });
+
+  it('POST /recovery/password-change returns a generic 401 for an unknown username, not a 404/500', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/recovery/password-change',
+      payload: {
+        username: 'nobody-such-user',
+        newClientSalt: Buffer.from(CLIENT_SALT).toString('base64'),
+        newKdfParams: KDF_PARAMS,
+        newAuthHash: Buffer.from(new Uint8Array(32)).toString('base64'),
+        newWrappedVaultKeyPassword: Buffer.from(new Uint8Array(61)).toString('base64'),
+      },
+    });
+    expect(res.statusCode).toBe(401);
+  });
 });
 
 describe('GET /health', () => {

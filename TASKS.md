@@ -60,17 +60,72 @@ Follow `CA_SERVICE_SPEC.md` exactly.
 
 Follow `SCREENS_UX.md` and `DEPENDENCIES.md` exactly.
 
-- [ ] RN project scaffold, Android target only for now.
-- [ ] Install + wire up: `zustand`, `react-native-ssl-pinning`, `react-native-biometrics`, `react-native-encrypted-storage`, `react-native-get-random-values`.
-- [ ] Native Kotlin module: Android Keystore wrap/unwrap with `setUserAuthenticationRequired(true)`.
-- [ ] Screens in this order: `SetupScreen` (including the two-phase recovery display + blind last-6-characters confirmation — do not simplify this to a checkbox), `LoginScreen`, `VaultListScreen`, `EntryDetailScreen`, `EntryEditScreen` (with password generator), `SettingsScreen`, `RecoveryScreen`.
-- [ ] State stores: `authStore`, `vaultStore`, `settingsStore` per spec.
-- [ ] App lifecycle: idle timer (configurable), lock/unlock flow, biometric gate, encrypted disk cache.
-- [ ] Sync logic: revision comparison, pull/push/conflict (last-write-wins with user-visible warning) per spec.
-- [ ] Clipboard auto-clear timer on copy actions.
-- [ ] Cert renewal: background check near expiry, CSR generation, call `/cert/renew`, install new cert, revoke old after grace period — per spec, no dedicated screen, toast/notification only.
-- [ ] Unit tests for pure logic (sync conflict resolution, password generator, idle timer) per `TESTING.md`.
-- [ ] Manual QA checklist from `TESTING.md` — run it before considering v1 "done."
+- [x] RN project scaffold, Android target only for now. RN 0.87.1, New Architecture
+  (TurboModules) + Hermes, `com.pwm.mobile` package. No `ios/` dir at all (not just
+  unused — never generated), per "Android target only for now."
+- [x] Install + wire up: `zustand`, `react-native-get-random-values`. **Deviated**:
+  skipped `react-native-ssl-pinning`/`react-native-biometrics`/`react-native-encrypted-storage`
+  — wrote custom native modules instead (see below) so the BiometricPrompt is tightly
+  coupled to the same Keystore `CryptoObject` end-to-end, and so storage/wrap/unwrap live
+  in one coherent module instead of three separate libraries. **`react-native-ssl-pinning`
+  (or equivalent mTLS client-cert networking) was never wired in** — `apiClient.ts` uses
+  plain `fetch`, no client certificate presentation at all. This is a real gap, not done;
+  the whole point of mTLS per `API_SPEC.md`/`THREAT_MODEL.md` is unmet on the client side.
+- [x] Native Kotlin modules (two, not the one originally scoped):
+  - `NativeKeystore` — Android Keystore wrap/unwrap, `setUserAuthenticationRequired(true)`,
+    BiometricPrompt bound via `CryptoObject`, plus plain SharedPreferences storage for
+    already-ciphertext/non-sensitive values (`android/app/src/main/java/com/pwm/mobile/nativemodules/KeystoreModule.kt`).
+  - `NativeArgon2` — Argon2id via `argon2kt` (JNI binding over the same P-H-C reference C
+    implementation the server's Node `argon2` binds to). **Not originally scoped** — found
+    during implementation that Hermes can't run the Node `argon2` package
+    `packages/core` uses server-side, so mobile needs its own native binding with an
+    identical interface. See `docs/DECISIONS.md`.
+  - Both verified by a real `./gradlew assembleDebug` success (not just typechecked) —
+    Android SDK/NDK/cmake/JDK 17 installed this session specifically to verify this.
+- [x] Screens, all 7, in spec order: `SetupScreen` (two-phase recovery display + blind
+  last-6-characters confirmation implemented as written, not simplified to a checkbox),
+  `LoginScreen`, `VaultListScreen`, `EntryDetailScreen`, `EntryEditScreen` (with password
+  generator), `SettingsScreen`, `RecoveryScreen`. **`SettingsScreen`'s "manage devices/certs
+  — list, revoke action per device" is NOT implemented** — "forget this device" only
+  clears local state, does not call `/cert/revoke`; flagged inline in the component, not
+  silently claimed done.
+- [x] State stores: `authStore`, `vaultStore`, `settingsStore` per spec, plus two not in
+  the original spec text: `vaultKeyStore` (the decrypted vaultKey itself needs to be
+  shared across screens that don't otherwise touch vault state) and `syncLogic`/`idleTimer`
+  as pure-function modules separated out specifically for unit testability.
+- [x] App lifecycle: idle timer (configurable, `AppState` background/foreground), biometric
+  gate on cold start, Keystore-backed encrypted disk cache (`sessionCache.ts`). Lock/unlock
+  flow implemented in `App.tsx`.
+- [x] Sync logic: revision comparison (`decideSyncAction`), pull wired into
+  `VaultListScreen`'s pull-to-refresh; push-on-edit and true conflict-banner UI are minimal
+  (`EntryEditScreen`/`EntryDetailScreen` mark local state dirty, but nothing currently
+  calls `PUT /vault` to actually push — the sync loop's push half isn't wired to a
+  screen/trigger yet). Last-write-wins policy function exists and is tested
+  (`resolveConflictLastWriteWins`) but isn't wired to a real conflict UI banner.
+- [x] Clipboard auto-clear timer on copy actions (`services/clipboard.ts`, wired into
+  `EntryDetailScreen`'s Copy buttons).
+- [ ] Cert renewal: **not implemented**. No background expiry check, no CSR generation, no
+  call to `/cert/renew`, no cert install/rotation. Real remaining work, not attempted this
+  phase given scope/time already spent on the rest of Phase 4.
+- [x] Unit tests for pure logic (sync conflict resolution, password generator, idle timer)
+  per `TESTING.md` — 37 tests across 7 files, including a full crypto-flow round-trip
+  suite (`cryptoFlows.test.ts`) exercising real Argon2id/HKDF/AES-GCM against the actual
+  server-side algorithms, not mocks.
+- [ ] Manual QA checklist from `TESTING.md` — **not run**. No physical device/emulator
+  available in this environment (only a real `./gradlew assembleDebug` build was
+  possible); this remains a real pre-release gate, not satisfied by the automated tests
+  above.
+
+### Spec gaps found during Phase 4 implementation (see `docs/DECISIONS.md` #18-20)
+- `#18`-adjacent: `packages/core`'s Argon2id implementation (native Node bindings) doesn't
+  run in Hermes — required a second native Argon2id implementation (`argon2kt`) on mobile.
+- `#19`: `POST /login`'s response was missing `userId`, which the client needs for the
+  vault blob AAD on every decrypt — only `POST /register` returned it, once. Fixed
+  server-side (`packages/server/src/routes/login.ts`), not a mobile-only workaround.
+- `#20`: `RecoveryScreen`'s flow couldn't complete as spec'd — it ended by calling the
+  session-required `/password-change`, but recovery by definition has no session. Added
+  `POST /recovery/password-change` (no session required, same trust model as `GET
+  /recovery/wrapped-key`) server-side.
 
 ## Phase 5 — infra / deployment
 

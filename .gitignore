@@ -20,9 +20,15 @@ coverage/
 
 # Android (packages/mobile)
 packages/mobile/android/app/build/
+packages/mobile/android/build/
 packages/mobile/android/.gradle/
 packages/mobile/android/local.properties
+packages/mobile/android/app/debug.keystore
+packages/mobile/android/app/*.jks
 packages/mobile/ios/Pods/
+
+# Claude Code local tool state, not project content
+.claude/
 
 # CA service flat-file storage, never committed
 services/ca/data/

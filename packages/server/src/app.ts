@@ -11,6 +11,7 @@ import { registerGetVaultRoute } from './routes/getVault.js';
 import { registerPutVaultRoute } from './routes/putVault.js';
 import { registerPasswordChangeRoute } from './routes/passwordChange.js';
 import { registerRecoveryWrappedKeyRoute } from './routes/recoveryWrappedKey.js';
+import { registerRecoveryPasswordChangeRoute } from './routes/recoveryPasswordChange.js';
 import { registerCertRenewRoute } from './routes/certRenew.js';
 import { registerCertRevokeRoute } from './routes/certRevoke.js';
 import { startCrlPoller } from './lib/crlPoller.js';
@@ -67,6 +68,7 @@ export function buildApp(options: BuildAppOptions = {}): App {
   registerPutVaultRoute(app);
   registerPasswordChangeRoute(app);
   registerRecoveryWrappedKeyRoute(app);
+  registerRecoveryPasswordChangeRoute(app);
 
   const caServiceUrl = process.env.CA_SERVICE_URL;
   const caClient = caServiceUrl ? buildCaClient(caServiceUrl) : undefined;
