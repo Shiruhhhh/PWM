@@ -37,7 +37,7 @@ Follow `API_SPEC.md` and `DB_SCHEMA.md` exactly.
 
 - [x] Prisma schema from `DB_SCHEMA.md`, initial migration. (`last_used_at` column added to match API_SPEC.md's rolling-TTL session model — see `docs/DB_SCHEMA.md` and `docs/DECISIONS.md`.)
 - [x] Fastify app skeleton, `zod`-based schema validation via `fastify-type-provider-zod`.
-- [x] Implement endpoints in this order: `GET /login/params`, `POST /register`, `POST /login`, `GET /vault`, `PUT /vault`, `POST /password-change`, `GET /recovery/wrapped-key`, `POST /cert/renew`, `POST /cert/revoke`. (`/cert/renew` and `/cert/revoke` call an injectable `CaClient` interface — real implementation lands in Phase 3 once `pwm-ca` exists.)
+- [x] Implement endpoints in this order: `GET /login/params`, `POST /register`, `POST /login`, `GET /vault`, `PUT /vault`, `POST /password-change`, `GET /recovery/wrapped-key`, `POST /cert/renew`, `POST /cert/revoke`. (`/cert/renew` and `/cert/revoke` call an injectable `CaClient` interface; real `httpCaClient` HTTP implementation wired in `app.ts` once Phase 3's `pwm-ca` landed — see `lib/caClient.ts`.)
 - [x] Session handling: opaque tokens, server-side session table, expiry. Rolling 90-day TTL per `API_SPEC.md`.
 - [x] Rate limiting (`@fastify/rate-limit`) on the pre-session endpoints per spec.
 - [x] Generic error responses — no username enumeration, no leaking which field failed on auth errors. Applied consistently to `/login/params`, `/login`, and `/recovery/wrapped-key` (the last one wasn't explicit in the spec but extended for consistency, see `docs/DECISIONS.md`).
@@ -50,11 +50,11 @@ Follow `API_SPEC.md` and `DB_SCHEMA.md` exactly.
 
 Follow `CA_SERVICE_SPEC.md` exactly.
 
-- [ ] Minimal Fastify (or Go, your call per spec) service: `/sign`, `/revoke`, `/crl`, `/health`.
-- [ ] Flat-file storage: CA key/cert, `crl.json`, `issuance.log` — no DB.
-- [ ] CSR validation (reject weak keys).
-- [ ] systemd unit file for deployment (not Docker, per spec).
-- [ ] Manual bootstrap script/runbook: generate CA keypair on-device, generate pwm-app's own client cert signed by it — document as a runbook since this step is deliberately manual.
+- [x] Minimal Fastify (or Go, your call per spec) service: `/sign`, `/revoke`, `/crl`, `/health`. (Chose Fastify — reuse same stack/tooling as `packages/server`, per `DEPENDENCIES.md`. Not a pnpm workspace package; standalone npm-managed service with its own lockfile, wired into CI as a separate job.)
+- [x] Flat-file storage: CA key/cert, `crl.json`, `issuance.log` — no DB. (Atomic write-then-rename for `crl.json` so a crash mid-write can't corrupt the revocation gate; append-only `issuance.log`.)
+- [x] CSR validation (reject weak keys). Shells out to `openssl` (per `DEPENDENCIES.md`, avoids `node-forge`) — rejects RSA < 2048 bits and non-approved curves (only P-256/P-384/Ed25519/Ed448 accepted). Also validates the CSR's subject CN matches the request body's `deviceCn` before signing (extra check, not explicit in spec text, but prevents issuing a cert for an identity the caller didn't ask for).
+- [x] systemd unit file for deployment (not Docker, per spec). `services/ca/deploy/pwm-ca.service`, hardened (`ProtectSystem=strict`, `NoNewPrivileges`, scoped `ReadWritePaths`).
+- [x] Manual bootstrap script/runbook: generate CA keypair on-device, generate pwm-app's own client cert signed by it — document as a runbook since this step is deliberately manual. `services/ca/scripts/bootstrap.sh`.
 
 ## Phase 4 — packages/mobile (React Native, Android)
 

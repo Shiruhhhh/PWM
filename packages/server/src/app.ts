@@ -13,6 +13,7 @@ import { registerRecoveryWrappedKeyRoute } from './routes/recoveryWrappedKey.js'
 import { registerCertRenewRoute } from './routes/certRenew.js';
 import { registerCertRevokeRoute } from './routes/certRevoke.js';
 import { startCrlPoller } from './lib/crlPoller.js';
+import { httpCaClient } from './lib/caClient.js';
 
 export interface BuildAppOptions {
   logger?: boolean;
@@ -42,12 +43,14 @@ export function buildApp(options: BuildAppOptions = {}): App {
   registerPutVaultRoute(app);
   registerPasswordChangeRoute(app);
   registerRecoveryWrappedKeyRoute(app);
-  registerCertRenewRoute(app);
-  registerCertRevokeRoute(app);
+
+  const caServiceUrl = process.env.CA_SERVICE_URL;
+  const caClient = caServiceUrl ? httpCaClient(caServiceUrl) : undefined;
+  registerCertRenewRoute(app, caClient);
+  registerCertRevokeRoute(app, caClient);
 
   app.get('/health', async () => ({ status: 'ok' }));
 
-  const caServiceUrl = process.env.CA_SERVICE_URL;
   if (caServiceUrl) {
     const poller = startCrlPoller({ caServiceUrl, logger: app.log });
     app.addHook('onClose', () => {

@@ -1,0 +1,26 @@
+[Unit]
+Description=PWM CA signing service
+After=network.target
+
+[Service]
+Type=simple
+User=pwm-ca
+Group=pwm-ca
+Environment=CA_DATA_DIR=/etc/pwm-ca
+Environment=HOST=127.0.0.1
+Environment=PORT=4433
+WorkingDirectory=/opt/pwm-ca
+ExecStart=/usr/bin/node /opt/pwm-ca/dist/index.js
+Restart=on-failure
+RestartSec=5
+
+# Hardening — this service only needs to read/write /etc/pwm-ca and talk
+# openssl on exec, nothing else.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/etc/pwm-ca
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
