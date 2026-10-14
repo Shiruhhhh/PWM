@@ -255,3 +255,19 @@ the Phase 1-3 code-review fix commit, and Phase 4) because CI status was never c
 after pushing — only local test runs were verified. Checking `gh run list`/`gh run view`
 after every push is now something to do by default, not just when the user flags a
 failure.
+
+**Follow-up**: after the fixes above, CI's `build` job still failed on a fourth bug —
+`node_modules/hermes-compiler` (the prebuilt Hermes bytecode compiler RN 0.87 ships as a
+separate npm package) wasn't present in `packages/mobile/node_modules/` even though it
+resolved fine inside the pnpm store. The gradle plugin's `detectOSAwareHermesCommand`
+does a raw `File()` existence check for `node_modules/hermes-compiler/...` relative to
+the mobile package's own root — not real Node module resolution — so it never found the
+copy pnpm hoisted only as a transitive dependency of `react-native` itself. First
+misdiagnosed this as sandbox-environment-specific (no network access to download
+hermes-compiler) and said so in the commit that fixed the other three bugs; that
+diagnosis was wrong — confirmed by reproducing the exact same failure in CI's own logs
+after that push. Fixed by adding `hermes-compiler` (pinned to the exact version
+`react-native@0.87.1` itself depends on) as an explicit `packages/mobile` devDependency,
+so pnpm symlinks it into the package's own `node_modules` where the gradle plugin's
+naive path check actually looks. Verified with a real `./gradlew assembleRelease`
+success locally (55MB signed release APK), not just a bundle-step check.
