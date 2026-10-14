@@ -39,11 +39,25 @@ export async function writeCrl(entries: CrlEntry[]): Promise<void> {
   await rename(tmp, target);
 }
 
+/**
+ * Serializes concurrent revocation writes through a single in-process
+ * queue. Without this, two concurrent POST /revoke calls can both read N
+ * entries before either writes back, and the second write silently drops
+ * the first revocation (lost-update race).
+ */
+let revocationQueue: Promise<unknown> = Promise.resolve();
+
 export async function appendRevocation(entry: CrlEntry): Promise<CrlEntry[]> {
-  const entries = await readCrl();
-  entries.push(entry);
-  await writeCrl(entries);
-  return entries;
+  const result = revocationQueue.then(async () => {
+    const entries = await readCrl();
+    entries.push(entry);
+    await writeCrl(entries);
+    return entries;
+  });
+  // Swallow rejection for queue-chaining purposes only; the real error
+  // still propagates to this call's own awaiter via `result`.
+  revocationQueue = result.catch(() => undefined);
+  return result;
 }
 
 export interface IssuanceLogEntry {

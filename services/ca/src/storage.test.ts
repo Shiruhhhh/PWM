@@ -38,6 +38,17 @@ describe('appendRevocation', () => {
     const entries = await readCrl();
     expect(entries.map((e) => e.fingerprint)).toEqual(['one', 'two']);
   });
+
+  it('does not lose entries under concurrent calls (read-modify-write race)', async () => {
+    const calls = Array.from({ length: 20 }, (_, i) =>
+      appendRevocation({ fingerprint: `fp-${i}`, revokedAt: '2026-01-01T00:00:00.000Z' }),
+    );
+    await Promise.all(calls);
+    const entries = await readCrl();
+    expect(entries).toHaveLength(20);
+    const fingerprints = new Set(entries.map((e) => e.fingerprint));
+    expect(fingerprints.size).toBe(20);
+  });
 });
 
 describe('appendIssuanceLog', () => {

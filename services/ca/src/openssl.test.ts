@@ -17,6 +17,7 @@ const execFileAsync = promisify(execFile);
 let dir: string;
 let goodCsr: string;
 let weakCsr: string;
+let commaCnCsr: string;
 let caCertDir: string;
 
 beforeAll(async () => {
@@ -51,6 +52,21 @@ beforeAll(async () => {
     '/CN=device-weak',
   ]);
   weakCsr = await readFile(join(dir, 'weak.csr'), 'utf8');
+
+  await execFileAsync('openssl', [
+    'req',
+    '-new',
+    '-newkey',
+    'ed25519',
+    '-noenc',
+    '-keyout',
+    join(dir, 'comma.key'),
+    '-out',
+    join(dir, 'comma.csr'),
+    '-subj',
+    '/CN=device\\,with-comma',
+  ]);
+  commaCnCsr = await readFile(join(dir, 'comma.csr'), 'utf8');
 
   caCertDir = await mkdtemp(join(tmpdir(), 'pwm-ca-authority-'));
   await execFileAsync('openssl', [
@@ -99,6 +115,10 @@ describe('validateCsrSubjectCn', () => {
     await expect(validateCsrSubjectCn(goodCsr, 'some-other-device')).rejects.toThrow(
       InvalidCsrError,
     );
+  });
+
+  it('matches a CN containing a comma (RFC2253-escaped in openssl output)', async () => {
+    await expect(validateCsrSubjectCn(commaCnCsr, 'device,with-comma')).resolves.toBeUndefined();
   });
 });
 

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import Fastify from 'fastify';
 import rateLimit from '@fastify/rate-limit';
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod';
@@ -17,6 +18,29 @@ import { httpCaClient } from './lib/caClient.js';
 
 export interface BuildAppOptions {
   logger?: boolean;
+}
+
+/**
+ * Loads the pwm-app client cert/key and the pwm-ca-internal CA cert from
+ * disk (paths from env, never committed — see .env.example) and builds the
+ * mTLS-presenting CaClient. These files are provisioned once by the manual
+ * bootstrap runbook (services/ca/scripts/bootstrap.sh), per CA_SERVICE_SPEC.md.
+ */
+function buildCaClient(caServiceUrl: string): ReturnType<typeof httpCaClient> {
+  const certPath = process.env.CA_CLIENT_CERT_PATH;
+  const keyPath = process.env.CA_CLIENT_KEY_PATH;
+  const caPath = process.env.CA_TRUST_CERT_PATH;
+  if (!certPath || !keyPath || !caPath) {
+    throw new Error(
+      'CA_SERVICE_URL set but CA_CLIENT_CERT_PATH/CA_CLIENT_KEY_PATH/CA_TRUST_CERT_PATH missing — ' +
+        'pwm-ca requires mTLS, see docs/CA_SERVICE_SPEC.md bootstrap step.',
+    );
+  }
+  return httpCaClient(caServiceUrl, {
+    certPem: readFileSync(certPath, 'utf8'),
+    keyPem: readFileSync(keyPath, 'utf8'),
+    caPem: readFileSync(caPath, 'utf8'),
+  });
 }
 
 export function buildApp(options: BuildAppOptions = {}): App {
@@ -45,7 +69,7 @@ export function buildApp(options: BuildAppOptions = {}): App {
   registerRecoveryWrappedKeyRoute(app);
 
   const caServiceUrl = process.env.CA_SERVICE_URL;
-  const caClient = caServiceUrl ? httpCaClient(caServiceUrl) : undefined;
+  const caClient = caServiceUrl ? buildCaClient(caServiceUrl) : undefined;
   registerCertRenewRoute(app, caClient);
   registerCertRevokeRoute(app, caClient);
 

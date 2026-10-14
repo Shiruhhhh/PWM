@@ -1,8 +1,21 @@
+function intFromEnv(value: string | undefined, fallback: number): number {
+  if (value === undefined || value === '') {
+    return fallback;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`invalid integer env value: "${value}"`);
+  }
+  return parsed;
+}
+
 export const config = {
   get dataDir(): string {
     return process.env.CA_DATA_DIR ?? '/etc/pwm-ca';
   },
-  port: Number(process.env.PORT ?? 4433),
+  get port(): number {
+    return intFromEnv(process.env.PORT, 4433);
+  },
   host: process.env.HOST ?? '127.0.0.1',
   certExpiryDays: 90,
 };
