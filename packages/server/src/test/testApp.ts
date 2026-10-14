@@ -1,11 +1,17 @@
 import type { PrismaClient } from '@prisma/client';
 import type { App } from '../types.js';
+import type { CaClient } from '../lib/caClient.js';
 import { startTestDb, type TestDb } from './pgliteServer.js';
 
 export interface TestContext {
   app: App;
   prisma: PrismaClient;
   testDb: TestDb;
+}
+
+export interface CreateTestContextOptions {
+  /** Injected fake CaClient, so cert-flow tests don't hit the real notYetImplementedCaClient. */
+  caClient?: CaClient;
 }
 
 /**
@@ -20,7 +26,9 @@ export interface TestContext {
  * worker/module graph, so setting it here, before the dynamic imports
  * below, is sufficient for one test file to get one isolated DB.
  */
-export async function createTestContext(): Promise<TestContext> {
+export async function createTestContext(
+  options: CreateTestContextOptions = {},
+): Promise<TestContext> {
   process.env.ENUMERATION_HMAC_SECRET ??= 'test-secret-not-for-production';
 
   const testDb = await startTestDb();
@@ -29,7 +37,7 @@ export async function createTestContext(): Promise<TestContext> {
   const { buildApp } = await import('../app.js');
   const { prisma } = await import('../lib/prisma.js');
 
-  const app: App = buildApp({ logger: false });
+  const app: App = buildApp({ logger: false, caClient: options.caClient });
   await app.ready();
 
   return { app, prisma, testDb };

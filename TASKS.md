@@ -127,14 +127,38 @@ Follow `SCREENS_UX.md` and `DEPENDENCIES.md` exactly.
   `POST /recovery/password-change` (no session required, same trust model as `GET
   /recovery/wrapped-key`) server-side.
 
-## Phase 5 — infra / deployment
+## Phase 5 — cert bootstrap redesign + admin plane
 
-Per `PROXMOX_NETWORK.md`, `BACKUP.md`, `MONITORING.md`, `DEPLOY.md`. Proxmox access: see memory (SSH key at `~/.ssh/pwm_proxmox`, host `192.168.1.254`, requires VPN connected) — ask the user to confirm VPN is up before attempting SSH.
+Blocks Phase 6 (infra deploy) — do not start Phase 6 until this phase and the rest of Phase 4's open items are complete. This phase resolves a real architectural gap found after Phase 4 was mostly built: mTLS is enforced at the TLS layer (Caddy `require_and_verify`), so it cannot be bypassed per-route on a single listener — a brand-new device has no cert and therefore cannot reach ANY endpoint on a single mTLS-only listener, including the ones needed to get its first cert. Resolved design, worked out directly with the user:
+
+- [ ] **Two separate Caddy listeners/site-blocks** on `pwm-app`, both pointing at the same Fastify app (this needs real separate TCP listeners/bind addresses — client cert verification happens at the TLS layer before Caddy can route by path, so a path-based rule on one listener cannot work):
+  - **LAN/VPN-only listener**: firewalled to the OpenVPN subnet / local LAN only (per `PROXMOX_NETWORK.md`), never port-forwarded on the router. Hosts exactly two endpoints: `POST /register` and `POST /cert/initial`.
+  - **Port 443, public, full mTLS `require_and_verify`**: everything else — `/login`, `/vault`, `/password-change`, `/cert/renew`, `/cert/revoke`, `/recovery/*`, and the new `/admin/*` group below.
+- [ ] `POST /register` (LAN-only):
+  - Gated by a `registrationOpen` boolean flag (server config/DB value, default `true`).
+  - **Auto-logs in on success** — returns the same response shape `/login` would: `{ sessionToken, expiresAt, userId, wrappedVaultKeyPassword }`. No separate `/login` call needed during bootstrap.
+  - `/login` itself never needs to exist on the LAN-only listener — it only ever runs for devices that already have a cert, so it stays exclusively behind mTLS on port 443.
+- [ ] `POST /cert/initial` (LAN-only, session-required, **no existing-cert check** — there isn't one yet): generates/signs the device's first cert via `pwm-ca`, reusing the same signing flow `/cert/renew` uses. Returns `{ cert, certId }`.
+- [ ] `users.is_admin BOOLEAN NOT NULL DEFAULT false` — no hardcoded/default admin account (explicitly rejected by the user as an insecure-defaults anti-pattern). Instead: **first-registered-user auto-admin**. In the `/register` handler, if `userCount === 0` at the moment of insert, set `is_admin = true` on the new user; every later registration defaults `is_admin = false`. Fully self-resolving from real registration order, no bootstrap credential, no manual DB edit.
+- [ ] `/admin/*` route group (port 443, mTLS, so only an already-provisioned admin device can reach it — LAN/VPN presence alone is NOT sufficient for these):
+  - `PATCH /admin/registration` — toggle `registrationOpen`.
+  - `GET /admin/users` — list accounts (id, username, created_at, cert count, is_admin).
+  - `POST /admin/certs/:certId/revoke` — admin-triggered device revoke (covers "lost someone else's phone and they're not around to revoke it themselves").
+  - `PATCH /admin/users/:id/admin` — promote another user to admin. This is the only path for granting admin after the first user; no other bootstrap mechanism exists by design.
+  - Every `/admin/*` route must check three things: valid session, valid mTLS cert (already enforced by the listener), AND `is_admin = true` on the session's user. Reject non-admin authenticated users with a generic `403`.
+  - Explicitly NOT building: any endpoint for an admin to create an account on someone else's behalf. Self-registration (gated by the open/closed flag) is the only account-creation path.
+- [ ] Update `docs/API_SPEC.md`, `docs/DB_SCHEMA.md`, and `docs/PROXMOX_NETWORK.md` to reflect this design (new endpoints, `is_admin` column, two-listener firewall layout) **before** writing code. Confirm specs are updated before implementation starts, per the ground rules below.
+- [ ] Finish the rest of Phase 4's remaining open items alongside this phase, since they're in the same mTLS-bootstrap critical path: mTLS client-cert networking in `packages/mobile` (`apiClient.ts` currently uses plain `fetch`, no cert presentation at all), cert renewal flow (background expiry check, CSR generation, call `/cert/renew`, install/rotate cert), `SettingsScreen`'s device-revoke button actually calling `/cert/revoke` (currently only clears local state), vault push-sync wired to a real UI trigger (edits mark dirty but nothing calls `PUT /vault` yet), and the manual QA checklist from `TESTING.md` run end-to-end on a real device once a backend is deployed to test against.
+- [ ] Fix the 5 confirmed correctness/resource findings from the Phase 1-4 code reviews (see `docs/DECISIONS.md` for the authoritative list if not already resolved): RFC2253 DN parser's `+` handling in `services/ca/src/openssl.ts`, uncaught startup crash on missing CA cert files in `packages/server/src/app.ts`, `config.port` getter thrown outside the only try/catch in `services/ca/src/index.ts`, `PORT` env validation accepting hex/exponential/negative strings in `services/ca/src/config.ts`, and the never-closed undici Agent in `packages/server/src/lib/caClient.ts`.
+
+## Phase 6 — infra / deployment
+
+Per `PROXMOX_NETWORK.md`, `BACKUP.md`, `MONITORING.md`, `DEPLOY.md`. Proxmox access: see memory (SSH key at `~/.ssh/pwm_proxmox`, host `192.168.1.254`, requires VPN connected) — ask the user to confirm VPN is up before attempting SSH. Do not start this phase until Phase 5 is fully complete and confirmed.
 
 - [ ] Create `pwm-app` VM/LXC, static IP `192.168.1.10`.
 - [ ] Create `pwm-ca` LXC, static IP `192.168.1.11`.
-- [ ] Write and apply Proxmox firewall rules (`/etc/pve/firewall/<vmid>.fw`) for both, allow-list per `PROXMOX_NETWORK.md` — confirm with user before applying, this changes live infra.
-- [ ] Add router port-forward: TCP 443 → `192.168.1.10:443`. **This is a user action on their router — confirm with user, don't assume remote access to the router itself.**
+- [ ] Write and apply Proxmox firewall rules (`/etc/pve/firewall/<vmid>.fw`) for both, allow-list per `PROXMOX_NETWORK.md` (including the LAN-only listener's restricted firewall rule from Phase 5) — confirm with user before applying, this changes live infra.
+- [ ] Add router port-forward: TCP 443 → `192.168.1.10:443`. **This is a user action on their router — confirm with user, don't assume remote access to the router itself.** Do NOT forward the LAN-only listener's port.
 - [ ] Bootstrap CA on `pwm-ca` (manual step, see Phase 3 runbook).
 - [ ] Deploy `pwm-app` containers via `docker compose up -d`.
 - [ ] Set up backup cron jobs per `BACKUP.md` (DB dump daily, `vzdump` weekly for both VM/LXC).

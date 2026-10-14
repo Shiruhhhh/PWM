@@ -1,16 +1,33 @@
 # PWM — API Spec (v1)
 
-All endpoints behind Caddy with mTLS `require_and_verify` — unauthenticated TLS handshakes never reach app code. Server additionally issues session tokens for per-user auth on top of mTLS (mTLS proves "a trusted device," session proves "which user, currently logged in").
+**Two Caddy listeners** on `pwm-app`, both pointing at the same Fastify app (see
+`docs/DECISIONS.md` #22, `docs/PROXMOX_NETWORK.md`):
+
+- **LAN/VPN-only listener** — firewalled to the OpenVPN subnet / local LAN, never
+  port-forwarded on the router. Hosts exactly `POST /register` and `POST /cert/initial` —
+  the only two endpoints a brand-new, cert-less device can ever reach. Plain TLS here, no
+  client cert required (there isn't one yet).
+- **Port 443, public, full mTLS `require_and_verify`** — unauthenticated TLS handshakes
+  never reach app code. Hosts everything else: `/login`, `/vault`, `/password-change`,
+  `/cert/renew`, `/cert/revoke`, `/recovery/*`, `/admin/*`. Server additionally issues
+  session tokens for per-user auth on top of mTLS (mTLS proves "a trusted device,"
+  session proves "which user, currently logged in").
+
+These are real separate TCP listeners/bind addresses, not a path-based rule on one
+listener — client-cert verification happens at the TLS layer, before Caddy can route by
+HTTP path, so a single listener has no way to carve out a per-route exception.
 
 ## Data model
 
-**users**: id, username, client_salt, kdf_params(json), server_salt, auth_hash, wrapped_vault_key_password, wrapped_vault_key_recovery, created_at
+**users**: id, username, client_salt, kdf_params(json), server_salt, auth_hash, wrapped_vault_key_password, wrapped_vault_key_recovery, is_admin(bool), created_at
 
 **vault_blobs**: user_id, encrypted_blob, revision(int), blob_format_version, updated_at
 
 **sessions**: token, user_id, created_at, expires_at, last_used_at
 
 **client_certs**: id, user_id, cert_cn, fingerprint, issued_at, expires_at, revoked(bool)
+
+**server_config**: a single-row key/value table (or similar) holding `registration_open` (bool, default `true`) — see `docs/DECISIONS.md` #22.
 
 ## Endpoints
 
@@ -19,14 +36,26 @@ No session required — not secret, needed before client can even compute `authH
 - Returns: `{ clientSalt, kdfParams }`
 - Same generic response/error shape regardless of whether username exists — prevents enumeration.
 
-### `POST /register`
+### `POST /register` (LAN/VPN-only listener)
 Body: `{ username, clientSalt, kdfParams, authHash, wrappedVaultKeyPassword, wrappedVaultKeyRecovery }`
+- Only reachable on the LAN/VPN-only listener, per `docs/DECISIONS.md` #22 — never
+  exposed on the public mTLS listener.
+- Gated by the `registrationOpen` flag (server_config, default `true`) — rejects with a
+  generic `403` if closed. Togglable via `PATCH /admin/registration`.
 - Server generates `serverSalt`, computes `Argon2id(authHash, serverSalt)`, stores result (never stores raw `authHash`).
 - Rejects if username taken.
-- Returns: `{ userId }`
+- **First registered user ever (`userCount === 0` at insert time) gets `is_admin = true`
+  automatically.** Every later registration defaults `is_admin = false`. No hardcoded
+  admin account, no bootstrap credential — see `docs/DECISIONS.md` #22.
+- **Auto-logs in on success** (removes the need for `/login` to ever exist on the
+  LAN-only listener). Returns the same shape `POST /login` returns:
+  `{ sessionToken, expiresAt, userId, wrappedVaultKeyPassword }`.
 
-### `POST /login`
+### `POST /login` (public mTLS listener only)
 Body: `{ username, authHash }`
+- Never exposed on the LAN-only listener — it only ever serves devices that already have
+  a client cert (a brand-new device gets its session via `/register`'s auto-login
+  instead). See `docs/DECISIONS.md` #22.
 - Server recomputes `Argon2id(authHash, storedServerSalt)`, constant-time compare against stored hash.
 - Same generic failure response whether username missing or hash mismatch.
 - On match: creates session row.
@@ -88,6 +117,50 @@ Body: `{ certId }`
 - Pushes revocation to CA signing LXC's CRL.
 - Use case: "lost my phone" button in SettingsScreen.
 
+### `POST /cert/initial` (LAN/VPN-only listener, session required, no existing-cert check)
+Body: `{ csr, deviceCn }`
+- Only reachable on the LAN/VPN-only listener, alongside `/register` — per
+  `docs/DECISIONS.md` #22. Issues a brand-new device's *first* client cert; deliberately
+  skips the "must already have a valid cert" check `/cert/renew` does, since there isn't
+  one yet.
+- `deviceCn` is required here (unlike `/cert/renew`, which reuses the existing cert row's
+  stored `certCn` — there's no prior row to read a CN from yet). The client picks one (a
+  random device identifier) and it must match the CSR's own subject CN —
+  `services/ca`'s `validateCsrSubjectCn` enforces that.
+- Session required (from `/register`'s auto-login). Forwards CSR to CA signing LXC, same
+  signing flow `/cert/renew` reuses.
+- Returns: `{ cert, certId }`
+- After this call succeeds and the cert is installed, the device uses the public mTLS
+  listener (port 443) for everything from then on — no further LAN/VPN requirement.
+
+## Admin endpoints (public mTLS listener, `is_admin` required)
+
+Per `docs/DECISIONS.md` #22: no hardcoded/default admin account. The first registered
+user (`userCount === 0` at `/register` time) becomes admin automatically; every
+`/admin/*` route additionally requires `is_admin = true` on the session's user (on top of
+the valid session + valid mTLS cert the listener already enforces) — non-admin
+authenticated users get a generic `403`. No endpoint lets an admin create an account on
+someone else's behalf; self-registration (gated by `registrationOpen`) is the only
+account-creation path.
+
+### `PATCH /admin/registration`
+Body: `{ open: boolean }`
+- Toggles `registrationOpen`.
+
+### `GET /admin/users`
+- Returns: `{ users: [{ id, username, createdAt, certCount, isAdmin }] }`
+
+### `POST /admin/certs/:certId/revoke`
+- Admin-triggered device revoke — same effect as a user revoking their own device via
+  SettingsScreen's `/cert/revoke`, for the "lost someone else's phone and they're not
+  around" case. Not scoped to the admin's own `userId` (unlike the user-facing
+  `/cert/revoke`, which only allows revoking the caller's own certs).
+
+### `PATCH /admin/users/:id/admin`
+Body: `{ isAdmin: boolean }`
+- Promotes (or demotes) another user's admin status. The only path for granting admin
+  after the first user; no other bootstrap mechanism exists by design.
+
 ## Session TTL policy
 
 - Rolling 90-day TTL. Every authenticated request extends `expires_at` to `now() + 90 days` and bumps `last_used_at` — session only expires after 90 days of zero activity, not from a fixed login timestamp.
@@ -98,13 +171,15 @@ Body: `{ certId }`
 ## Rate limiting
 
 Applied at Fastify middleware (`@fastify/rate-limit`) and/or Caddy:
-- `/login`, `/register`, `/login/params`, `/recovery/wrapped-key`, `/recovery/password-change` — strict per-IP + per-username limits. These are the only pre-session-token endpoints, primary brute-force targets.
+- `/login`, `/register`, `/login/params`, `/recovery/wrapped-key`, `/recovery/password-change` — strict per-IP + per-username limits. These are the only pre-session-token endpoints, primary brute-force targets. `/register`'s LAN-only placement reduces exposure but isn't a substitute for rate limiting — anyone on the LAN/VPN is still a Fastify-level untrusted caller until they've actually registered.
 
 ## Error handling conventions
 
 - Never reveal whether a username exists, on any pre-auth endpoint — identical generic error either way.
 - All session-required endpoints return `401` uniformly on missing/expired/invalid session, no further detail.
 - `409` on revision conflict is the only endpoint-specific structured error exposed to client logic (needed for sync retry).
+- All `/admin/*` routes return a generic `403` for an authenticated-but-non-admin user — don't leak that admin routes exist beyond the `403` itself.
+- `/register` returns a generic `403` when `registrationOpen` is `false` — distinct from the username-taken `409`, since a closed-registration rejection isn't an enumeration risk (it says nothing about any particular username).
 
 ## Out of scope for v1
 

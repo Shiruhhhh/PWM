@@ -25,4 +25,36 @@ describe('config.port', () => {
     process.env.PORT = 'not-a-number';
     expect(() => config.port).toThrow();
   });
+
+  it('rejects a hex-looking PORT instead of silently binding the wrong port', () => {
+    process.env.PORT = '0x10';
+    expect(() => config.port).toThrow();
+  });
+
+  it('rejects an exponential-notation PORT', () => {
+    process.env.PORT = '1e2';
+    expect(() => config.port).toThrow();
+  });
+
+  it('rejects a negative PORT', () => {
+    process.env.PORT = '-1';
+    expect(() => config.port).toThrow();
+  });
+
+  it('rejects a PORT of 0', () => {
+    process.env.PORT = '0';
+    expect(() => config.port).toThrow();
+  });
+
+  it('rejects a PORT above 65535', () => {
+    process.env.PORT = '65536';
+    expect(() => config.port).toThrow();
+  });
+
+  it('accepts the boundary values 1 and 65535', () => {
+    process.env.PORT = '1';
+    expect(config.port).toBe(1);
+    process.env.PORT = '65535';
+    expect(config.port).toBe(65535);
+  });
 });

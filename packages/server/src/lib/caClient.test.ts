@@ -4,7 +4,12 @@ import { promisify } from 'node:util';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { httpCaClient, CaServiceUnavailableError, type MtlsClientCertConfig } from './caClient.js';
+import {
+  httpCaClient,
+  notYetImplementedCaClient,
+  CaServiceUnavailableError,
+  type MtlsClientCertConfig,
+} from './caClient.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -138,5 +143,16 @@ describe('httpCaClient', () => {
     const client = httpCaClient('https://pwm-ca.internal', mtls, fetchImpl);
 
     await expect(client.revoke({ fingerprint: 'fp' })).rejects.toThrow(CaServiceUnavailableError);
+  });
+
+  it('close() closes the underlying mTLS dispatcher without throwing', async () => {
+    const client = httpCaClient('https://pwm-ca.internal', mtls);
+    await expect(client.close()).resolves.toBeUndefined();
+  });
+});
+
+describe('notYetImplementedCaClient', () => {
+  it('close() is a no-op that resolves without throwing', async () => {
+    await expect(notYetImplementedCaClient.close()).resolves.toBeUndefined();
   });
 });

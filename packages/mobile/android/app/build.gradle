@@ -128,4 +128,17 @@ dependencies {
 
     // Coroutines for running Argon2id hashing (CPU-heavy) off the main thread.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+
+    // mTLS client-cert networking (NativeMtlsClient) -- OkHttp lets us
+    // supply a custom SSLSocketFactory/X509ExtendedKeyManager backed by
+    // the Keystore-resident client cert, which RN's/Android's plain
+    // fetch/URLConnection APIs don't support presenting at all.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // PKCS#10 CSR building for cert renewal -- Android has no built-in
+    // CSR/ASN.1 encoder. Used purely as a library (never registered as a
+    // java.security.Provider), which avoids the classpath conflict with
+    // Android's own stripped-down built-in BC provider.
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.80")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.80")
 }

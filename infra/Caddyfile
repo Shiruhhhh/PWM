@@ -1,7 +1,9 @@
-# PWM Caddy config — mTLS termination for pwm-app (192.168.1.10), per
-# docs/PROXMOX_NETWORK.md and docs/API_SPEC.md. Unauthenticated TLS
-# handshakes (no client cert / invalid cert — i.e. not signed by our CA)
-# are rejected here, before any request reaches the Fastify app.
+# PWM Caddy config — TWO separate listeners on pwm-app, per
+# docs/DECISIONS.md #22 and docs/API_SPEC.md. Both point at the same
+# Fastify app, but client-cert verification happens at the TLS layer,
+# before Caddy can route by HTTP path — so this genuinely needs two
+# site blocks on two different bind addresses/ports, not a path rule on
+# one listener.
 #
 # NOTE: stock Caddy's client_auth only verifies a cert chains to the
 # trusted CA — it has no CRL/revocation support. A *revoked* cert still
@@ -11,25 +13,66 @@
 # {$PWM_PUBLIC_HOST} must be set to the real DDNS hostname (see root
 # .env.example) — Caddy uses it to request/renew a Let's Encrypt cert.
 
+# Public listener, port 443, full mTLS. Everything EXCEPT /register and
+# /cert/initial — those two routes also exist in the same Fastify app
+# (Fastify itself has no listener concept; Caddy is what separates
+# them), so this block explicitly denies them here as defense in depth,
+# on top of the Proxmox firewall rule that keeps this listener's
+# underlying port reachable from the internet while the LAN-only
+# listener's port (8443) never is (see docs/PROXMOX_NETWORK.md).
 {$PWM_PUBLIC_HOST} {
 	tls {
 		client_auth {
 			mode require_and_verify
-			trusted_ca_cert_file /etc/pwm/ca.crt
+			trust_pool file /etc/pwm/ca.crt
 		}
 	}
 
-	reverse_proxy node-app:3000 {
-		# Forward the verified client cert (DER, base64, RFC 9440
-		# Client-Cert format) so the app can compute its fingerprint and
-		# check it against the CRL — Caddy only verifies the cert chains
-		# to our CA, it has no revocation support (see
-		# docs/CA_SERVICE_SPEC.md, docs/DECISIONS.md #17).
-		header_up Client-Cert :{tls_client_certificate_der_base64}:
+	@bootstrapOnlyRoutes path /register /cert/initial
+
+	# `route` forces explicit top-to-bottom order -- Caddy's default
+	# directive-type precedence runs `respond` before `reverse_proxy`
+	# regardless of write order or matchers, which would silently 404
+	# every request (matched or not) if these weren't wrapped like this.
+	route {
+		respond @bootstrapOnlyRoutes 404
+		reverse_proxy node-app:3000 {
+			# Forward the verified client cert (DER, base64, RFC 9440
+			# Client-Cert format) so the app can compute its fingerprint and
+			# check it against the CRL — Caddy only verifies the cert chains
+			# to our CA, it has no revocation support (see
+			# docs/CA_SERVICE_SPEC.md, docs/DECISIONS.md #17).
+			header_up Client-Cert :{tls_client_certificate_der_base64}:
+		}
 	}
 
 	log {
 		output file /var/log/caddy/pwm-access.log
+		format json
+	}
+}
+
+# LAN/VPN-only listener, port 8443. Plain TLS, NO client_auth — a
+# brand-new device has no cert yet, that's the whole point. Reachability
+# is restricted entirely by the Proxmox firewall (192.168.1.0/24 only,
+# never port-forwarded on the router — see docs/PROXMOX_NETWORK.md), not
+# by anything in this Caddy config itself. Hosts ONLY /register and
+# /cert/initial; everything else 404s here as defense in depth, on top
+# of the firewall-level restriction.
+:8443 {
+	@bootstrapOnlyRoutes path /register /cert/initial
+
+	# Same explicit-ordering reasoning as the public listener above:
+	# `respond` runs before `reverse_proxy` by default regardless of
+	# matchers, so without `route` the unconditional 404 below would fire
+	# for every request, including the two allowed paths.
+	route {
+		reverse_proxy @bootstrapOnlyRoutes node-app:3000
+		respond 404
+	}
+
+	log {
+		output file /var/log/caddy/pwm-bootstrap-access.log
 		format json
 	}
 }

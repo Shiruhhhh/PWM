@@ -19,6 +19,9 @@ model User {
   authHash                 Bytes    @map("auth_hash")
   wrappedVaultKeyPassword  Bytes    @map("wrapped_vault_key_password")
   wrappedVaultKeyRecovery  Bytes    @map("wrapped_vault_key_recovery")
+  // Set true only for the first-ever registered user, at insert time
+  // (see docs/DECISIONS.md #22) -- no hardcoded admin account.
+  isAdmin                  Boolean  @default(false) @map("is_admin")
   createdAt                DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   sessions    Session[]
@@ -69,4 +72,14 @@ model ClientCert {
   @@index([userId])
   @@index([fingerprint])
   @@map("client_certs")
+}
+
+// Single-row config table for server-wide toggles not tied to any one
+// user -- just registrationOpen for now. `id` is a fixed boolean with a
+// CHECK constraint enforcing exactly one row, per docs/DB_SCHEMA.md.
+model ServerConfig {
+  id               Boolean @id @default(true)
+  registrationOpen Boolean @default(true) @map("registration_open")
+
+  @@map("server_config")
 }

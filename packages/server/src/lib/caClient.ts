@@ -13,6 +13,15 @@ export interface CaClient {
   }): Promise<{ cert: string; fingerprint: string; expiresAt: string }>;
 
   revoke(params: { fingerprint: string }): Promise<{ crlVersion: string }>;
+
+  /**
+   * Closes the underlying mTLS connection pool, if any. Harmless no-op
+   * for clients without one (notYetImplementedCaClient). Callers should
+   * invoke this on graceful shutdown to avoid leaking open connections —
+   * matters once anything re-constructs a CaClient at runtime (e.g.
+   * future cert-rotation support), not just at process-exit time.
+   */
+  close(): Promise<void>;
 }
 
 export class CaServiceUnavailableError extends Error {
@@ -33,6 +42,9 @@ export const notYetImplementedCaClient: CaClient = {
   },
   async revoke() {
     throw new CaServiceUnavailableError('pwm-ca not configured (CA_SERVICE_URL unset)');
+  },
+  async close() {
+    // No dispatcher to close.
   },
 };
 
@@ -90,6 +102,10 @@ export function httpCaClient(
 
     async revoke({ fingerprint }) {
       return (await request('/revoke', { fingerprint })) as { crlVersion: string };
+    },
+
+    async close() {
+      await dispatcher.close();
     },
   };
 }

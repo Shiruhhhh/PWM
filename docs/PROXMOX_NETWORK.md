@@ -27,11 +27,28 @@ Public DDNS `REDACTED-DDNS-HOST.example.com` → `203.0.113.1` (router WAN IP).
 Proxmox has per-VM/CT firewall (`firewall=1` + rules in `/etc/pve/firewall/<vmid>.fw`) and a cluster-wide one (`/etc/pve/firewall/cluster.fw`, currently empty). Use **per-CT/VM rules**, not datacenter-wide, to avoid affecting existing Minecraft/VPN setup.
 
 ### pwm-app (192.168.1.10)
-- **Inbound allowed**: TCP 443 from anywhere (this is the mTLS-protected public endpoint — router port-forwards here, per earlier decision; unauthenticated TLS handshakes rejected by Caddy, not by firewall, so firewall just needs to let the port through).
+
+Per `docs/DECISIONS.md` #22, Caddy runs **two separate listeners** on this VM/LXC, both
+needing their own firewall treatment:
+
+- **Inbound allowed**: TCP 443 from anywhere (the public, full-mTLS listener — router
+  port-forwards here, per earlier decision; unauthenticated TLS handshakes rejected by
+  Caddy, not by firewall, so firewall just needs to let the port through).
+- **Inbound allowed**: TCP on the LAN-only listener's port (suggest **8443**, picked to
+  avoid colliding with 443 on the same host; not itself significant) **only from
+  192.168.1.0/24** (this flat LAN — there's no separate VPN subnet; the existing OpenVPN
+  CT, 192.168.1.2, bridges remote clients onto this same `192.168.1.0/24` range, so
+  "LAN/VPN-only" in practice means "this /24, however the client got onto it"). **Never
+  port-forwarded on the router** — this listener must never be reachable from the public
+  internet, by design (it's the one that doesn't require mTLS at all).
 - **Inbound allowed**: SSH (22) from host/admin IP only, if needed for management — not from internet.
 - **Outbound allowed**: to 192.168.1.11 (pwm-ca) on its signing-service port only, for cert renewal forwarding.
 - **Outbound allowed**: standard (DNS, NTP, package updates).
-- **Explicitly blocked**: inbound from 192.168.1.2 (OpenVPN CT) and 192.168.1.5 / Minecraft VM — no reason either should ever reach the password manager backend. Deny by default, allow only what's listed.
+- **Explicitly blocked**: inbound from 192.168.1.5 / Minecraft VM to EITHER pwm-app
+  listener — no reason it should ever reach the password manager backend, including the
+  LAN-only one. (192.168.1.2, the OpenVPN CT, is explicitly *allowed* to the LAN-only
+  listener — it's the bridge remote legitimate clients use to reach it.) Deny by default,
+  allow only what's listed.
 
 ### pwm-ca (192.168.1.11)
 - **Inbound allowed**: only from 192.168.1.10 (pwm-app), on the signing-service port. Nothing else, no exceptions.
@@ -52,9 +69,13 @@ TCP 25565 → 192.168.1.5:25565     (Minecraft, CT 102) [confirm actual port in 
 
 New rule to add:
 ```
-TCP 443   → 192.168.1.10:443      (PWM backend, mTLS via Caddy)
+TCP 443   → 192.168.1.10:443      (PWM backend, mTLS via Caddy, public listener)
 ```
 No rule needed for 192.168.1.11 (pwm-ca) — stays internal-only, by design.
+
+**No router rule for the LAN-only listener's port (8443)** — it must stay unreachable
+from the public internet by design (see `docs/DECISIONS.md` #22); only the Proxmox
+firewall's `192.168.1.0/24`-only allow rule above gates it.
 
 ## Action items before implementation
 

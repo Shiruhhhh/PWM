@@ -39,7 +39,7 @@ export function logVaultAccess(
 
 export function logCertEvent(
   log: FastifyBaseLogger,
-  fields: { userId: string; event: 'renewed' | 'revoked'; certId: string },
+  fields: { userId: string; event: 'issued' | 'renewed' | 'revoked'; certId: string },
 ): void {
   log.info({ event: `cert_${fields.event}`, userId: fields.userId, certId: fields.certId });
 }

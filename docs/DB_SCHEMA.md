@@ -12,6 +12,7 @@ CREATE TABLE users (
   auth_hash                    BYTEA NOT NULL,           -- Argon2id(authKey, server_salt)
   wrapped_vault_key_password   BYTEA NOT NULL,           -- vaultKey wrapped under password-derived key
   wrapped_vault_key_recovery   BYTEA NOT NULL,           -- vaultKey wrapped under recovery key
+  is_admin                     BOOLEAN NOT NULL DEFAULT false, -- set true only for the first-ever registered user, at insert time (see docs/DECISIONS.md #22) -- no hardcoded admin account
   created_at                   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -45,6 +46,14 @@ CREATE TABLE client_certs (
 );
 CREATE INDEX idx_client_certs_user_id ON client_certs(user_id);
 CREATE INDEX idx_client_certs_fingerprint ON client_certs(fingerprint);
+
+-- Single-row config table -- holds server-wide toggles that aren't tied to any one
+-- user. Just registration_open for now; id is fixed so there's exactly one row.
+CREATE TABLE server_config (
+  id                 BOOLEAN PRIMARY KEY DEFAULT true CHECK (id = true), -- enforces single row
+  registration_open  BOOLEAN NOT NULL DEFAULT true
+);
+INSERT INTO server_config (id, registration_open) VALUES (true, true);
 ```
 
 ## Notes
@@ -53,3 +62,4 @@ CREATE INDEX idx_client_certs_fingerprint ON client_certs(fingerprint);
 - `users.auth_hash` / `server_salt` separate from `client_salt` / `kdf_params` — client-side params are not secret (needed pre-auth via `/login/params`), server-side salt is purely internal, never exposed.
 - No `shared_vaults` / `organizations` tables — explicitly out of scope (each user fully isolated, confirmed project decision).
 - Cleanup job (cron or simple interval in Node process): delete expired `sessions` rows periodically — not critical at 2-user scale but cheap to add.
+- `users.is_admin` / `server_config.registration_open`: added per `docs/DECISIONS.md` #22 to resolve the mTLS cert-bootstrap deadlock (a cert-less device can't reach any mTLS-only endpoint, including the ones needed to get its first cert) without a hardcoded/default admin account. The first user ever registered becomes admin automatically (`userCount === 0` at insert); every `/admin/*` route additionally requires `is_admin = true`.

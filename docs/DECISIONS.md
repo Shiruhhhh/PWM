@@ -271,3 +271,59 @@ after that push. Fixed by adding `hermes-compiler` (pinned to the exact version
 so pnpm symlinks it into the package's own `node_modules` where the gradle plugin's
 naive path check actually looks. Verified with a real `./gradlew assembleRelease`
 success locally (55MB signed release APK), not just a bundle-step check.
+
+### 22. Cert bootstrap deadlock + no public registration — found after Phase 4, resolved before Phase 5 (new)
+
+Real architectural gap, found when Phase 4's mTLS client-cert work (left unimplemented,
+per Phase 4's own notes above) was about to be picked back up: Caddy's `client_auth
+require_and_verify` operates at the **TLS layer**, before Caddy can route by HTTP path.
+A single mTLS-enforcing listener therefore has no way to carve out an exception for any
+endpoint, including the ones a brand-new, cert-less device would need to reach to obtain
+its first cert — `/register` and a first-cert-issuance endpoint are unreachable on a pure
+mTLS listener by any device that doesn't already have a cert. Deadlock.
+
+A second, related problem surfaced in the same discussion: the APK provides no
+cryptographic proof of anything to the server — any value embedded in the APK can be
+extracted by decompiling it, so "only accept requests from our app" cannot be enforced
+by an app-side secret alone. Combined with an open, internet-reachable `/register`, an
+attacker who merely finds the open port (no APK needed at all) could create accounts
+server never intended to allow.
+
+- [x] **Two separate Caddy listeners**, not one: a **LAN/VPN-only listener** (firewalled
+  to the OpenVPN subnet, never port-forwarded) hosting exactly `POST /register` and
+  `POST /cert/initial`; and the existing **port 443, full mTLS**, hosting everything else
+  (`/login`, `/vault`, `/password-change`, `/cert/renew`, `/cert/revoke`, `/recovery/*`,
+  and the new `/admin/*` group below). Requires real separate TCP listeners/bind
+  addresses on Caddy — a path-based rule on one listener cannot work, since the TLS
+  handshake (and its client-cert check) completes before Caddy knows which path was
+  requested.
+- [x] `POST /register` **auto-logs in on success**, returning the same shape `/login`
+  returns (`{ sessionToken, expiresAt, userId, wrappedVaultKeyPassword }`). This removes
+  the need for `/login` to ever exist on the LAN-only listener — it only ever serves
+  already-certed devices, so it stays exclusively behind mTLS on port 443.
+- [x] `registrationOpen` boolean flag (default `true`) gates `/register`, togglable via
+  the new admin plane — user's intent is to flip it off once both real accounts exist.
+- [x] `POST /cert/initial` (LAN-only, session-required, no existing-cert check) issues a
+  device's first cert, reusing `/cert/renew`'s signing flow against pwm-ca.
+- [x] **No hardcoded/default admin account** (explicitly rejected as an insecure-defaults
+  anti-pattern — bad practice regardless of this being a 2-user private deployment, and
+  directly against the project's own stated zero-knowledge/no-weak-links design
+  principle). Instead: `users.is_admin BOOLEAN DEFAULT false`, and the **first registered
+  user automatically becomes admin** (`userCount === 0` at the moment of insert). Every
+  later registration defaults `is_admin = false`. Self-resolving from real registration
+  order, no bootstrap credential, no manual DB edit, no default row shipped in the schema.
+- [x] `/admin/*` route group (port 443, mTLS — LAN/VPN presence alone is **not**
+  sufficient for these, an already-provisioned admin device's cert is also required):
+  `PATCH /admin/registration` (toggle the flag), `GET /admin/users` (list accounts),
+  `POST /admin/certs/:certId/revoke` (admin-triggered device revoke — covers "lost
+  someone else's phone and they're not around to revoke it themselves"),
+  `PATCH /admin/users/:id/admin` (promote another user — the only path for granting
+  admin after the first user). Every route checks session + mTLS cert + `is_admin`;
+  non-admin authenticated users get a generic `403`.
+- [x] Explicitly **not building**: any endpoint for an admin to create an account on
+  someone else's behalf. Self-registration (gated by the open/closed flag) stays the
+  only account-creation path — the admin plane only ever gates/manages, never creates.
+
+Tracked as **Phase 5** in `TASKS.md` (old Phase 5 "infra/deployment" renumbered to
+**Phase 6** — infra deploy cannot start until this phase, the rest of Phase 4's open
+items, and the 5 outstanding Phase 1-4 code-review findings are all resolved).

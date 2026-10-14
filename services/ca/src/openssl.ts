@@ -123,7 +123,7 @@ function parseRfc2253Dn(dn: string): Map<string, string> {
       inValue = true;
       continue;
     }
-    if (inValue && char === ',') {
+    if (inValue && (char === ',' || char === '+')) {
       attrs.set(key.trim(), value);
       key = '';
       value = '';

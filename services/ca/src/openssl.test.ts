@@ -18,6 +18,7 @@ let dir: string;
 let goodCsr: string;
 let weakCsr: string;
 let commaCnCsr: string;
+let multiValuedRdnCsr: string;
 let caCertDir: string;
 
 beforeAll(async () => {
@@ -67,6 +68,21 @@ beforeAll(async () => {
     '/CN=device\\,with-comma',
   ]);
   commaCnCsr = await readFile(join(dir, 'comma.csr'), 'utf8');
+
+  await execFileAsync('openssl', [
+    'req',
+    '-new',
+    '-newkey',
+    'ed25519',
+    '-noenc',
+    '-keyout',
+    join(dir, 'mvrdn.key'),
+    '-out',
+    join(dir, 'mvrdn.csr'),
+    '-subj',
+    '/CN=device-mv+O=Foo',
+  ]);
+  multiValuedRdnCsr = await readFile(join(dir, 'mvrdn.csr'), 'utf8');
 
   caCertDir = await mkdtemp(join(tmpdir(), 'pwm-ca-authority-'));
   await execFileAsync('openssl', [
@@ -119,6 +135,16 @@ describe('validateCsrSubjectCn', () => {
 
   it('matches a CN containing a comma (RFC2253-escaped in openssl output)', async () => {
     await expect(validateCsrSubjectCn(commaCnCsr, 'device,with-comma')).resolves.toBeUndefined();
+  });
+
+  it('correctly extracts CN from a multi-valued RDN (CN=x+O=y), not folding O into the CN value', async () => {
+    await expect(validateCsrSubjectCn(multiValuedRdnCsr, 'device-mv')).resolves.toBeUndefined();
+  });
+
+  it('rejects a multi-valued-RDN CSR against the wrong CN, confirming O was not merged in', async () => {
+    await expect(validateCsrSubjectCn(multiValuedRdnCsr, 'device-mv+O=Foo')).rejects.toThrow(
+      InvalidCsrError,
+    );
   });
 });
 

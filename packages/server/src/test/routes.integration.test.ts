@@ -17,11 +17,34 @@ import {
 // code (tests included) imports it from the '@pwm/core/node' subpath.
 import { deriveMasterKey } from '@pwm/core/node';
 import { createTestContext, teardownTestContext, type TestContext } from './testApp.js';
+import type { CaClient } from '../lib/caClient.js';
 
 let ctx: TestContext;
 
+/**
+ * Fake CaClient for cert-flow tests -- the real notYetImplementedCaClient
+ * always throws (no CA_SERVICE_URL in tests), so /cert/initial and
+ * /admin/certs/:certId/revoke need an injectable stand-in. Mints
+ * deterministic-but-unique fingerprints rather than calling a real CA.
+ */
+let signCounter = 0;
+const fakeCaClient: CaClient = {
+  async sign({ deviceCn }) {
+    signCounter += 1;
+    return {
+      cert: `FAKE_CERT_PEM_${deviceCn}_${signCounter}`,
+      fingerprint: `fake-fingerprint-${signCounter}`,
+      expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+    };
+  },
+  async revoke({ fingerprint }) {
+    return { crlVersion: `fake-crl-after-revoking-${fingerprint}` };
+  },
+  async close() {},
+};
+
 beforeAll(async () => {
-  ctx = await createTestContext();
+  ctx = await createTestContext({ caClient: fakeCaClient });
 }, 30000);
 
 afterAll(async () => {
@@ -49,7 +72,7 @@ describe('full account lifecycle: register -> login -> vault -> password-change 
   let sessionToken: string;
   let recoveryKey: Uint8Array;
 
-  it('registers a new account', async () => {
+  it('registers a new account, auto-logs in, and makes the first-ever user admin', async () => {
     const { authKey, vaultKey, vaultWrapKey } = await deriveKeys(username, password);
     recoveryKey = generateRecoveryKey();
 
@@ -70,8 +93,250 @@ describe('full account lifecycle: register -> login -> vault -> password-change 
     });
 
     expect(res.statusCode).toBe(200);
-    userId = res.json().userId;
+    const body = res.json();
+    userId = body.userId;
     expect(userId).toBeTruthy();
+
+    // Auto-login per docs/DECISIONS.md #22 -- same response shape /login
+    // returns, no separate /login call needed.
+    expect(body.sessionToken).toBeTruthy();
+    expect(body.expiresAt).toBeTruthy();
+    expect(body.wrappedVaultKeyPassword).toBe(Buffer.from(wrappedByPassword).toString('base64'));
+    sessionToken = body.sessionToken;
+
+    // First-ever registered user becomes admin automatically.
+    const adminCheck = await ctx.app.inject({
+      method: 'GET',
+      url: '/admin/users',
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    expect(adminCheck.statusCode).toBe(200);
+    const alice = adminCheck
+      .json()
+      .users.find((u: { username: string }) => u.username === username);
+    expect(alice.isAdmin).toBe(true);
+  });
+
+  it('a second registered user does NOT become admin', async () => {
+    const secondUsername = `bob-${Date.now()}`;
+    const { authKey, vaultKey, vaultWrapKey } = await deriveKeys(
+      secondUsername,
+      'bob-password-123',
+    );
+    const wrappedByPassword = wrapVaultKey(vaultKey, vaultWrapKey, secondUsername);
+    const wrappedByRecovery = wrapVaultKey(vaultKey, generateRecoveryKey(), secondUsername);
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/register',
+      payload: {
+        username: secondUsername,
+        clientSalt: Buffer.from(CLIENT_SALT).toString('base64'),
+        kdfParams: KDF_PARAMS,
+        authHash: Buffer.from(authKey).toString('base64'),
+        wrappedVaultKeyPassword: Buffer.from(wrappedByPassword).toString('base64'),
+        wrappedVaultKeyRecovery: Buffer.from(wrappedByRecovery).toString('base64'),
+      },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const adminCheck = await ctx.app.inject({
+      method: 'GET',
+      url: '/admin/users',
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    const bob = adminCheck
+      .json()
+      .users.find((u: { username: string }) => u.username === secondUsername);
+    expect(bob.isAdmin).toBe(false);
+  });
+
+  it('rejects registration when registrationOpen is false, re-opens after', async () => {
+    const closeRes = await ctx.app.inject({
+      method: 'PATCH',
+      url: '/admin/registration',
+      headers: { authorization: `Bearer ${sessionToken}` },
+      payload: { open: false },
+    });
+    expect(closeRes.statusCode).toBe(204);
+
+    const { authKey } = await deriveKeys('closed-reg-test', 'whatever-password');
+    const blockedRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/register',
+      payload: {
+        username: 'closed-reg-test',
+        clientSalt: Buffer.from(CLIENT_SALT).toString('base64'),
+        kdfParams: KDF_PARAMS,
+        authHash: Buffer.from(authKey).toString('base64'),
+        wrappedVaultKeyPassword: Buffer.from(new Uint8Array(61)).toString('base64'),
+        wrappedVaultKeyRecovery: Buffer.from(new Uint8Array(61)).toString('base64'),
+      },
+    });
+    expect(blockedRes.statusCode).toBe(403);
+
+    const reopenRes = await ctx.app.inject({
+      method: 'PATCH',
+      url: '/admin/registration',
+      headers: { authorization: `Bearer ${sessionToken}` },
+      payload: { open: true },
+    });
+    expect(reopenRes.statusCode).toBe(204);
+  });
+
+  it('non-admin user gets a generic 403 on /admin/* routes', async () => {
+    const nonAdminUsername = `carol-${Date.now()}`;
+    const { authKey, vaultKey, vaultWrapKey } = await deriveKeys(
+      nonAdminUsername,
+      'carol-password-123',
+    );
+    const wrappedByPassword = wrapVaultKey(vaultKey, vaultWrapKey, nonAdminUsername);
+    const wrappedByRecovery = wrapVaultKey(vaultKey, generateRecoveryKey(), nonAdminUsername);
+
+    const registerRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/register',
+      payload: {
+        username: nonAdminUsername,
+        clientSalt: Buffer.from(CLIENT_SALT).toString('base64'),
+        kdfParams: KDF_PARAMS,
+        authHash: Buffer.from(authKey).toString('base64'),
+        wrappedVaultKeyPassword: Buffer.from(wrappedByPassword).toString('base64'),
+        wrappedVaultKeyRecovery: Buffer.from(wrappedByRecovery).toString('base64'),
+      },
+    });
+    const nonAdminSessionToken = registerRes.json().sessionToken;
+
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/admin/users',
+      headers: { authorization: `Bearer ${nonAdminSessionToken}` },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: 'forbidden' });
+  });
+
+  it('POST /cert/initial issues a first cert for a session with no existing cert', async () => {
+    const deviceUsername = `dave-${Date.now()}`;
+    const { authKey, vaultKey, vaultWrapKey } = await deriveKeys(
+      deviceUsername,
+      'dave-password-123',
+    );
+    const wrappedByPassword = wrapVaultKey(vaultKey, vaultWrapKey, deviceUsername);
+    const wrappedByRecovery = wrapVaultKey(vaultKey, generateRecoveryKey(), deviceUsername);
+
+    const registerRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/register',
+      payload: {
+        username: deviceUsername,
+        clientSalt: Buffer.from(CLIENT_SALT).toString('base64'),
+        kdfParams: KDF_PARAMS,
+        authHash: Buffer.from(authKey).toString('base64'),
+        wrappedVaultKeyPassword: Buffer.from(wrappedByPassword).toString('base64'),
+        wrappedVaultKeyRecovery: Buffer.from(wrappedByRecovery).toString('base64'),
+      },
+    });
+    const deviceSessionToken = registerRes.json().sessionToken;
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/cert/initial',
+      headers: { authorization: `Bearer ${deviceSessionToken}` },
+      payload: { csr: 'FAKE_CSR_PEM', deviceCn: 'dave-device-1' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.cert).toContain('dave-device-1');
+    expect(body.certId).toBeTruthy();
+  });
+
+  it("admin can revoke another user's cert via /admin/certs/:certId/revoke", async () => {
+    const deviceUsername = `erin-${Date.now()}`;
+    const { authKey, vaultKey, vaultWrapKey } = await deriveKeys(
+      deviceUsername,
+      'erin-password-123',
+    );
+    const wrappedByPassword = wrapVaultKey(vaultKey, vaultWrapKey, deviceUsername);
+    const wrappedByRecovery = wrapVaultKey(vaultKey, generateRecoveryKey(), deviceUsername);
+
+    const registerRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/register',
+      payload: {
+        username: deviceUsername,
+        clientSalt: Buffer.from(CLIENT_SALT).toString('base64'),
+        kdfParams: KDF_PARAMS,
+        authHash: Buffer.from(authKey).toString('base64'),
+        wrappedVaultKeyPassword: Buffer.from(wrappedByPassword).toString('base64'),
+        wrappedVaultKeyRecovery: Buffer.from(wrappedByRecovery).toString('base64'),
+      },
+    });
+    const deviceSessionToken = registerRes.json().sessionToken;
+
+    const initialRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/cert/initial',
+      headers: { authorization: `Bearer ${deviceSessionToken}` },
+      payload: { csr: 'FAKE_CSR_PEM', deviceCn: 'erin-device-1' },
+    });
+    const certId = initialRes.json().certId;
+
+    // The admin (alice, first-ever user, session from the very first test
+    // above) revokes erin's cert, not her own.
+    const revokeRes = await ctx.app.inject({
+      method: 'POST',
+      url: `/admin/certs/${certId}/revoke`,
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    expect(revokeRes.statusCode).toBe(204);
+
+    const dbCert = await ctx.prisma.clientCert.findUnique({ where: { id: certId } });
+    expect(dbCert?.revoked).toBe(true);
+  });
+
+  it('POST /admin/certs/:certId/revoke returns 404 for an unknown certId', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/admin/certs/00000000-0000-0000-0000-000000000000/revoke',
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('PATCH /admin/users/:id/admin promotes another user to admin', async () => {
+    const deviceUsername = `frank-${Date.now()}`;
+    const { authKey, vaultKey, vaultWrapKey } = await deriveKeys(
+      deviceUsername,
+      'frank-password-123',
+    );
+    const wrappedByPassword = wrapVaultKey(vaultKey, vaultWrapKey, deviceUsername);
+    const wrappedByRecovery = wrapVaultKey(vaultKey, generateRecoveryKey(), deviceUsername);
+
+    const registerRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/register',
+      payload: {
+        username: deviceUsername,
+        clientSalt: Buffer.from(CLIENT_SALT).toString('base64'),
+        kdfParams: KDF_PARAMS,
+        authHash: Buffer.from(authKey).toString('base64'),
+        wrappedVaultKeyPassword: Buffer.from(wrappedByPassword).toString('base64'),
+        wrappedVaultKeyRecovery: Buffer.from(wrappedByRecovery).toString('base64'),
+      },
+    });
+    const frankUserId = registerRes.json().userId;
+
+    const promoteRes = await ctx.app.inject({
+      method: 'PATCH',
+      url: `/admin/users/${frankUserId}/admin`,
+      headers: { authorization: `Bearer ${sessionToken}` },
+      payload: { isAdmin: true },
+    });
+    expect(promoteRes.statusCode).toBe(204);
+
+    const dbUser = await ctx.prisma.user.findUnique({ where: { id: frankUserId } });
+    expect(dbUser?.isAdmin).toBe(true);
   });
 
   it('rejects a duplicate username', async () => {
