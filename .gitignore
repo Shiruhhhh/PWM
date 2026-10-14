@@ -24,8 +24,11 @@ packages/mobile/android/app/.cxx/
 packages/mobile/android/build/
 packages/mobile/android/.gradle/
 packages/mobile/android/local.properties
-packages/mobile/android/app/debug.keystore
-packages/mobile/android/app/*.jks
+# debug.keystore is intentionally committed -- it's RN's universally
+# known, non-secret debug-signing keystore (same file/password in every
+# RN project), needed for CI's release-build smoke test to sign at all.
+# A real production release keystore would be a genuine secret and
+# would NOT be committed -- this project doesn't have one yet.
 packages/mobile/ios/Pods/
 
 # Claude Code local tool state, not project content
