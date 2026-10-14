@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@pwm/core": "workspace:*",
+    "@babel/runtime": "^7.25.0",
     "@noble/hashes": "^1.6.1",
     "@react-native-clipboard/clipboard": "^1.16.3",
     "react": "19.2.3",
@@ -24,7 +25,6 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@babel/preset-env": "^7.25.3",
-    "@babel/runtime": "^7.25.0",
     "@react-native-community/cli": "20.2.0",
     "@react-native-community/cli-platform-android": "20.2.0",
     "@react-native/babel-preset": "0.87.1",

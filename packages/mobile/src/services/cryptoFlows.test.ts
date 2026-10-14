@@ -13,7 +13,7 @@ jest.mock('../native/argon2', () => ({
       salt: Uint8Array,
       params: { memoryKiB: number; iterations: number; parallelism: number; hashLength: number },
     ) => {
-      const { deriveMasterKey } = jest.requireActual('@pwm/core');
+      const { deriveMasterKey } = jest.requireActual('@pwm/core/node');
       return deriveMasterKey(password, salt, {
         algorithm: 'argon2id',
         memoryKiB: params.memoryKiB,

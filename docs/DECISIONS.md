@@ -209,3 +209,49 @@ actually complete.
   a session error, keeping the anti-enumeration guarantee. Rate-limited the same as `GET
   /recovery/wrapped-key`. Implemented in `packages/server/src/routes/recoveryPasswordChange.ts`,
   documented in `docs/API_SPEC.md`.
+
+### 21. CI was broken on every commit since Phase 2, undetected — fixed after the user pasted failing CI logs
+Three real bugs, all missed locally because local testing always worked against an
+already-built `packages/core/dist/` left over from manual rebuilds during development;
+CI's fresh checkout never had that:
+
+- [x] **`test` job never built `@pwm/core` before running tests that import it** —
+  `packages/server`/`packages/mobile` both resolve `@pwm/core` via its built `dist/`
+  output (package.json `main`/`exports`), and the `test` CI job is a separate runner
+  from `build` (no artifact sharing), so `@pwm/server`'s integration tests failed with
+  "Failed to resolve entry for package @pwm/core" on every run since the first server
+  commit. Fixed: added `pnpm --filter @pwm/core run build` to the `test` job in
+  `.github/workflows/ci.yml`.
+- [x] **Metro couldn't bundle `@babel/runtime` under pnpm's symlinked `node_modules`** —
+  `packages/mobile`'s release build (`createBundleReleaseJsAndAssets`) failed with
+  "Unable to resolve module @babel/runtime/helpers/interopRequireDefault", even though
+  the file exists on disk at the expected path. Metro's default resolver doesn't follow
+  pnpm's content-addressable `.pnpm/` store symlinks. Fixed in
+  `packages/mobile/metro.config.js`: `resolver.unstable_enableSymlinks`,
+  `unstable_enablePackageExports`, a root-pointing `watchFolders`, and an
+  `extraNodeModules` proxy preferring the app's own `node_modules` — the standard
+  pnpm+Metro monorepo fix.
+- [x] **`packages/core`'s barrel export dragged the Node-only `argon2` native binding
+  into any consumer, including mobile** — once the symlink issue above was fixed, Metro's
+  bundler reached `@pwm/core`'s `index.ts`, which (via `export * from './kdf/argon2.js'`)
+  imports the Node `argon2` package even though mobile only ever uses the plain
+  `ARGON2ID_PARAMS` constant from that file, never the Node-binding functions. Metro
+  bundles a module's full top-level imports regardless of which named export is actually
+  used, so this broke mobile's bundle outright (`Unable to resolve module node:util`
+  inside `argon2`'s own source). Fixed: split `kdf/argon2.ts` into `kdf/argon2Params.ts`
+  (pure constants/types, exported from the main barrel — safe for mobile) and
+  `kdf/argon2.ts` (the Node-only `deriveMasterKey`/`hashAuthKey` functions, no longer
+  in the main barrel). Added a `./node` subpath export
+  (`packages/core/package.json`'s `exports` map) for server code that needs the
+  Node-only functions directly — `packages/server`'s own route code already calls
+  `argon2` itself rather than through `@pwm/core`, so only test files needed updating.
+
+Also bumped `actions/checkout`/`actions/setup-node` to v7 and `pnpm/action-setup` to v6
+across both workflow files — the previous v4/v4 pins were triggering a Node 20
+deprecation warning (not a failure, but worth clearing).
+
+**Process gap, not just a code bug**: these went undetected for three pushes (Phase 2,
+the Phase 1-3 code-review fix commit, and Phase 4) because CI status was never checked
+after pushing — only local test runs were verified. Checking `gh run list`/`gh run view`
+after every push is now something to do by default, not just when the user flags a
+failure.

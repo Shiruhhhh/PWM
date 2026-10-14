@@ -1,4 +1,4 @@
-export * from './kdf/argon2.js';
+export * from './kdf/argon2Params.js';
 export * from './kdf/hkdf.js';
 export * from './crypto/aesGcm.js';
 export * from './crypto/aad.js';

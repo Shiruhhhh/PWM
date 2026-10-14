@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import {
-  deriveMasterKey,
   encrypt,
   decrypt,
   buildVaultBlobAad,
@@ -12,6 +11,11 @@ import {
   parseVaultBlob,
   VAULT_BLOB_FORMAT_VERSION,
 } from '@pwm/core';
+// deriveMasterKey is Node-only (native argon2 binding) -- not exported
+// from the main @pwm/core barrel so Metro can bundle @pwm/core for
+// mobile without pulling in a package Hermes can't run. Server-side
+// code (tests included) imports it from the '@pwm/core/node' subpath.
+import { deriveMasterKey } from '@pwm/core/node';
 import { createTestContext, teardownTestContext, type TestContext } from './testApp.js';
 
 let ctx: TestContext;

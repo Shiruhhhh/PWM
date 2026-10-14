@@ -20,6 +20,7 @@ coverage/
 
 # Android (packages/mobile)
 packages/mobile/android/app/build/
+packages/mobile/android/app/.cxx/
 packages/mobile/android/build/
 packages/mobile/android/.gradle/
 packages/mobile/android/local.properties

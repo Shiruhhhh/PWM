@@ -1,27 +1,15 @@
 import * as argon2 from 'argon2';
+import { ARGON2ID_PARAMS, CLIENT_SALT_LENGTH_BYTES, type Argon2Params } from './argon2Params.js';
 
 /**
- * Argon2id parameters per CRYPTO_SPEC.md §1. These are the v1 defaults used
- * at registration; per-user `kdfParams` are stored server-side so future
- * tuning doesn't break existing users (see DECISIONS.md #3).
+ * Node-only Argon2id functions (native binding) — NOT exported from
+ * packages/core's main index.ts. See argon2Params.ts's docstring for
+ * why: Metro can't bundle the `argon2` native package for mobile, so
+ * this file is only safe for packages/server and Node-based tests to
+ * import directly (import from './kdf/argon2.js' or '@pwm/core/node',
+ * not the bare '@pwm/core' barrel).
  */
-export const ARGON2ID_PARAMS = {
-  algorithm: 'argon2id' as const,
-  memoryKiB: 65536,
-  iterations: 3,
-  parallelism: 4,
-  hashLength: 32,
-} as const;
-
-export interface Argon2Params {
-  algorithm: 'argon2id';
-  memoryKiB: number;
-  iterations: number;
-  parallelism: number;
-  hashLength: number;
-}
-
-export const CLIENT_SALT_LENGTH_BYTES = 16;
+export { ARGON2ID_PARAMS, CLIENT_SALT_LENGTH_BYTES, type Argon2Params };
 
 /**
  * Derives `masterKey` from the master password via Argon2id.
