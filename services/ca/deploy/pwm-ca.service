@@ -7,7 +7,7 @@ Type=simple
 User=pwm-ca
 Group=pwm-ca
 Environment=CA_DATA_DIR=/etc/pwm-ca
-Environment=HOST=127.0.0.1
+Environment=HOST=0.0.0.0
 Environment=PORT=4433
 WorkingDirectory=/opt/pwm-ca
 ExecStart=/usr/bin/node /opt/pwm-ca/dist/index.js
