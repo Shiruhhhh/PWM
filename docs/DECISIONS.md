@@ -458,3 +458,31 @@ check.
   "claimed success from an incomplete local diagnosis" entry, now specifically for
   multi-stage Docker builds where a later stage's install can silently drop something an
   earlier stage's postinstall hook depended on.
+
+### 27. `crlPoller.ts` used a bare, unauthenticated `fetch` — same mTLS gap as #25, different code path
+Found immediately after fixing #25/#26 and actually starting the real container: node-app
+logged `crl_poll_failed`, `"self-signed certificate in certificate chain"` on every poll.
+Root cause: `startCrlPoller` took a raw `caServiceUrl` string and an optional bare
+`fetchImpl`, calling `GET /crl` with no client cert and no CA trust at all — a completely
+separate code path from `caClient.ts`'s `httpCaClient` (which does present a client cert
+via an undici `Agent`). `CA_SERVICE_SPEC.md`'s "internal mTLS" requirement covers every
+endpoint, `/crl` included — it was never exempted for being a read.
+
+- [x] Added `getCrl()` to the `CaClient` interface, implemented in `httpCaClient` via a
+  new `get()` helper (the existing `request()` helper was hardcoded to POST). Both
+  `notYetImplementedCaClient` and the test suite's `fakeCaClient` implement it too.
+- [x] `crlPoller.ts`'s `CrlPollerOptions` now takes a `caClient: CaClient` instead of
+  `caServiceUrl`/`fetchImpl` — the poller calls `caClient.getCrl()`, reusing the exact
+  same mTLS-presenting connection `sign()`/`revoke()` already use, instead of building a
+  second, unauthenticated one.
+- [x] `app.ts`'s gating changed from `if (caServiceUrl)` to `if (caClient)` — starts the
+  poller whenever a usable client actually exists (matching every other CA-dependent
+  route's own condition), not just whenever the URL env var happens to be set.
+- [x] New `crlPoller.test.ts` — the poller had **no test coverage at all** before this;
+  nothing asserted it went through an authenticated client rather than a bare fetch, which
+  is exactly how this shipped unnoticed through #21-#26's otherwise-thorough test passes.
+  Added 3 tests: calls `caClient.getCrl()` and populates the cache, logs a structured
+  error and keeps the stale cache on failure, `stop()` actually stops further polling.
+- Verified against the real running stack on CT 201/202: `docker compose logs node-app`
+  showed `crl_poll_failed` before this fix, clean (no error) after rebuilding and
+  restarting with it.

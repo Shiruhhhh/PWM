@@ -1,26 +1,27 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { crlCache, type CrlEntry } from './crlCache.js';
+import { crlCache } from './crlCache.js';
+import type { CaClient } from './caClient.js';
 
-/** Polls pwm-ca's GET /crl periodically, per docs/CA_SERVICE_SPEC.md. */
+/**
+ * Polls pwm-ca's GET /crl periodically, per docs/CA_SERVICE_SPEC.md.
+ * Takes a CaClient (not a raw URL/fetch) so this reuses the exact same
+ * mTLS-presenting connection sign()/revoke() use — GET /crl is behind
+ * the same "internal mTLS" requirement as every other pwm-ca endpoint,
+ * not exempt just because it's a read. See docs/DECISIONS.md #27.
+ */
 export interface CrlPollerOptions {
-  caServiceUrl: string;
+  caClient: CaClient;
   logger: FastifyBaseLogger;
   intervalMs?: number;
-  fetchImpl?: typeof fetch;
 }
 
 const DEFAULT_INTERVAL_MS = 15 * 60 * 1000; // 15 min, per docs/CA_SERVICE_SPEC.md
 
 export function startCrlPoller(options: CrlPollerOptions): { stop(): void } {
   const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
-  const fetchImpl = options.fetchImpl ?? fetch;
 
   async function poll(): Promise<void> {
-    const res = await fetchImpl(`${options.caServiceUrl}/crl`);
-    if (!res.ok) {
-      throw new Error(`CRL fetch failed: ${res.status}`);
-    }
-    const entries = (await res.json()) as CrlEntry[];
+    const entries = await options.caClient.getCrl();
     crlCache.replace(entries);
   }
 

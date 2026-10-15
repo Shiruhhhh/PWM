@@ -145,6 +145,28 @@ describe('httpCaClient', () => {
     await expect(client.revoke({ fingerprint: 'fp' })).rejects.toThrow(CaServiceUnavailableError);
   });
 
+  it('getCrl() sends a GET request and returns the parsed CRL entries', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse([{ fingerprint: 'abc', revokedAt: '2026-01-01T00:00:00Z' }]));
+    const client = httpCaClient('https://pwm-ca.internal', mtls, fetchImpl);
+
+    const result = await client.getCrl();
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      'https://pwm-ca.internal/crl',
+      expect.objectContaining({ method: 'GET', dispatcher: expect.anything() }),
+    );
+    expect(result).toEqual([{ fingerprint: 'abc', revokedAt: '2026-01-01T00:00:00Z' }]);
+  });
+
+  it('getCrl() throws CaServiceUnavailableError on non-OK response', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse({}, false, 500));
+    const client = httpCaClient('https://pwm-ca.internal', mtls, fetchImpl);
+
+    await expect(client.getCrl()).rejects.toThrow(CaServiceUnavailableError);
+  });
+
   it('close() closes the underlying mTLS dispatcher without throwing', async () => {
     const client = httpCaClient('https://pwm-ca.internal', mtls);
     await expect(client.close()).resolves.toBeUndefined();
@@ -152,6 +174,10 @@ describe('httpCaClient', () => {
 });
 
 describe('notYetImplementedCaClient', () => {
+  it('getCrl() throws CaServiceUnavailableError', async () => {
+    await expect(notYetImplementedCaClient.getCrl()).rejects.toThrow(CaServiceUnavailableError);
+  });
+
   it('close() is a no-op that resolves without throwing', async () => {
     await expect(notYetImplementedCaClient.close()).resolves.toBeUndefined();
   });

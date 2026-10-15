@@ -104,8 +104,8 @@ export function buildApp(options: BuildAppOptions = {}): App {
 
   app.get('/health', async () => ({ status: 'ok' }));
 
-  if (caServiceUrl) {
-    const poller = startCrlPoller({ caServiceUrl, logger: app.log });
+  if (caClient) {
+    const poller = startCrlPoller({ caClient, logger: app.log });
     app.addHook('onClose', () => {
       poller.stop();
     });

@@ -15,6 +15,14 @@ export interface CaClient {
   revoke(params: { fingerprint: string }): Promise<{ crlVersion: string }>;
 
   /**
+   * Fetches the current CRL from pwm-ca, per docs/CA_SERVICE_SPEC.md's
+   * GET /crl. Same mTLS-presenting connection as sign()/revoke() — this
+   * endpoint is behind the same "internal mTLS" requirement, not
+   * exempt just because it's a read.
+   */
+  getCrl(): Promise<Array<{ fingerprint: string; revokedAt: string }>>;
+
+  /**
    * Closes the underlying mTLS connection pool, if any. Harmless no-op
    * for clients without one (notYetImplementedCaClient). Callers should
    * invoke this on graceful shutdown to avoid leaking open connections —
@@ -41,6 +49,9 @@ export const notYetImplementedCaClient: CaClient = {
     throw new CaServiceUnavailableError('pwm-ca not configured (CA_SERVICE_URL unset)');
   },
   async revoke() {
+    throw new CaServiceUnavailableError('pwm-ca not configured (CA_SERVICE_URL unset)');
+  },
+  async getCrl() {
     throw new CaServiceUnavailableError('pwm-ca not configured (CA_SERVICE_URL unset)');
   },
   async close() {
@@ -91,6 +102,18 @@ export function httpCaClient(
     return res.json();
   }
 
+  async function get(path: string): Promise<unknown> {
+    const res = await fetchImpl(`${baseUrl}${path}`, {
+      method: 'GET',
+      // @ts-expect-error -- undici-specific fetch option, not in the lib.dom.d.ts RequestInit type
+      dispatcher,
+    });
+    if (!res.ok) {
+      throw new CaServiceUnavailableError(`pwm-ca ${path} failed: ${res.status}`);
+    }
+    return res.json();
+  }
+
   return {
     async sign({ csr, requestingUserId, deviceCn }) {
       return (await request('/sign', { csr, requestingUserId, deviceCn })) as {
@@ -102,6 +125,10 @@ export function httpCaClient(
 
     async revoke({ fingerprint }) {
       return (await request('/revoke', { fingerprint })) as { crlVersion: string };
+    },
+
+    async getCrl() {
+      return (await get('/crl')) as Array<{ fingerprint: string; revokedAt: string }>;
     },
 
     async close() {

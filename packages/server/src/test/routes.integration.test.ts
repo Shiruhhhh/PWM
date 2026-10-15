@@ -40,6 +40,9 @@ const fakeCaClient: CaClient = {
   async revoke({ fingerprint }) {
     return { crlVersion: `fake-crl-after-revoking-${fingerprint}` };
   },
+  async getCrl() {
+    return [];
+  },
   async close() {},
 };
 
