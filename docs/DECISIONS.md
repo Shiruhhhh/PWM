@@ -424,3 +424,37 @@ existing test) bypasses the real network listener and TLS entirely.
   restarting the service — tracked as a Phase 6 resume step, not done automatically by
   this commit (the CA key must never be regenerated; only the new server cert needs
   adding on top of it).
+
+### 26. `packages/server/Dockerfile`'s runtime stage never actually generated a working Prisma client — two wrong fixes before the real one, found live during Phase 6's first `docker compose build`/`up`
+First attempt (commit `63b2d0d`): added `prisma migrate deploy` to the container's `CMD`
+without checking the runtime stage's existing `prisma generate` call — missed that
+`pnpm install --prod` (same stage, line above it) strips `prisma` from
+devDependencies, so that `RUN pnpm exec prisma generate` call was already broken before
+this phase, just never exercised (no deploy had been attempted yet).
+
+Second attempt, still wrong (commit `1254b41`): moved `prisma` from devDependencies to
+dependencies (correct — it's needed at runtime for `migrate deploy` too) but then
+**deleted** the runtime-stage `prisma generate` call entirely, reasoning that
+`@prisma/client`'s own postinstall hook (observed running during the `--prod` install's
+output) already regenerated the client. Building looked clean. **Only caught by actually
+running the container**, not just building the image: `docker compose up -d` produced a
+live crash loop —
+`Error: @prisma/client did not initialize yet. Please run "prisma generate"`. The
+postinstall hook's own output had already said why, buried in its warnings:
+`"We could not find your Prisma schema in the default locations"` — it runs from `/app`
+(the pnpm workspace root), not `packages/server/`, so its default-location search never
+finds `packages/server/prisma/schema.prisma` at all. A clean `docker compose build` is
+not evidence the image actually works — this gap would have shipped past a build-only
+check.
+
+- [x] Real fix: kept `prisma` as a real dependency (from attempt 2 — correct), and put
+  back the runtime-stage `RUN pnpm --filter @pwm/server exec prisma generate
+  --schema=prisma/schema.prisma` call (undoing attempt 2's deletion), now that `prisma`
+  is actually present in that stage's `node_modules` to run it with. Confirmed by
+  rebuilding, redeploying to the real CT 201, and watching `docker compose logs
+  node-app` show a clean start with no crash loop and `No pending migrations to apply`.
+- Process note: verify a container deploy by starting it and reading logs, not just by
+  a successful `docker compose build` — same category of mistake as `DECISIONS.md` #21's
+  "claimed success from an incomplete local diagnosis" entry, now specifically for
+  multi-stage Docker builds where a later stage's install can silently drop something an
+  earlier stage's postinstall hook depended on.
