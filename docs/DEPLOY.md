@@ -2,10 +2,31 @@
 
 ## pwm-app deployment
 
-- **Docker**, per project decision. `docker-compose.yml` on the VM, two services:
-  - `caddy` — reverse proxy, TLS + mTLS termination, mounts server/client certs and CRL.
-  - `node-app` — the Fastify backend, connects to DB (Postgres container too, or external if preferred — containerized Postgres simplest for 2-user scale).
-- Image built via CI (GitHub Actions), pushed to a container registry (GitHub Container Registry — free, integrates cleanly with a GitHub-hosted open-source repo), pulled on the VM.
+- **Docker**, per project decision. `docker-compose.yml` on the VM/LXC, three services:
+  - `caddy` — reverse proxy, TLS + mTLS termination. Exposes both 443 (public) and 8443
+    (LAN-only, per `docs/DECISIONS.md` #22's two-listener design — the Proxmox firewall,
+    not Caddy or Docker, is what actually keeps 8443 off the public internet). Trusts the
+    internal CA via a bind mount of the host's `/etc/pwm-app-cert/ca.crt` (placed there by
+    the CA bootstrap runbook, `services/ca/scripts/bootstrap.sh`'s step 2) into
+    `/etc/pwm/ca.crt`, matching `infra/Caddyfile`'s `trust_pool file` path.
+  - `node-app` — the Fastify backend. Also bind-mounts `/etc/pwm-app-cert` (same directory
+    Caddy reads from) read-only, and reads `CA_CLIENT_CERT_PATH`/`CA_CLIENT_KEY_PATH`/
+    `CA_TRUST_CERT_PATH` pointing into it — these are the files from the bootstrap
+    runbook's step 2 (pwm-app's own CA-signed client cert, for authenticating to pwm-ca's
+    `/sign`/`/revoke`/`/crl`), not the end-user mTLS certs (those are per-device, issued
+    at runtime via `/cert/initial`/`/cert/renew`, never baked into the container).
+  - `postgres` — containerized, simplest for 2-user scale; `DATABASE_URL` points at it by
+    service name.
+  - `node-app`'s container `CMD` runs `prisma migrate deploy` before starting the server,
+    on every container start — idempotent (no-op if already applied), so this needs no
+    separate manual migration step. Picks up both Prisma-generated and hand-added SQL
+    (`CHECK` constraints, seed `INSERT`s) in each migration folder, since `migrate deploy`
+    just applies each `migration.sql` as-is.
+- Image built via CI (GitHub Actions), pushed to a container registry (GitHub Container
+  Registry — free, integrates cleanly with a GitHub-hosted open-source repo), pulled on
+  the VM once a version tag has been cut and `release.yml` has run at least once. Before
+  the first tag exists, `docker compose build` (the `build:` block already in
+  `docker-compose.yml`) builds `node-app` locally on the host instead of pulling.
 - Deploy trigger: manual `docker compose pull && docker compose up -d` run by you over SSH, OR a simple webhook/script triggered on new image publish — **manual recommended for v1** (2-user project, infrequent deploys, auto-deploy adds complexity/risk — e.g. an untested push rolling straight to the VM that holds your actual passwords). Revisit automated deploy only if release cadence picks up.
 
 ## pwm-ca deployment

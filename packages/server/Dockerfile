@@ -26,4 +26,4 @@ RUN pnpm --filter @pwm/server exec prisma generate --schema=prisma/schema.prisma
 
 WORKDIR /app/packages/server
 EXPOSE 3000
-CMD ["node", "dist/index.js"]
+CMD ["sh", "-c", "pnpm exec prisma migrate deploy --schema=prisma/schema.prisma && node dist/index.js"]
