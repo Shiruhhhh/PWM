@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { View, Text, ScrollView, StyleSheet, Switch } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, Switch, Alert } from 'react-native';
 import { Button } from '../components/Button';
 import { TextField } from '../components/TextField';
 import { useAuthStore } from '../state/authStore';
 import { useVaultStore } from '../state/vaultStore';
 import { generatePassword } from '../services/passwordGenerator';
 import { generateUuid } from '../services/uuid';
+import { pushVaultIfDirty, SyncConflictError } from '../services/vaultSync';
 
 /**
  * EntryEditScreen per SCREENS_UX.md: add/edit entry, built-in password
@@ -49,7 +50,9 @@ export function EntryEditScreen() {
     }
   }
 
-  function handleSave() {
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
     const now = new Date().toISOString();
     upsertEntry({
       id: existing?.id ?? generateUuid(),
@@ -61,7 +64,27 @@ export function EntryEditScreen() {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     });
-    setScreen('vaultList');
+
+    setSaving(true);
+    try {
+      await pushVaultIfDirty();
+      setScreen('vaultList');
+    } catch (err) {
+      if (err instanceof SyncConflictError) {
+        Alert.alert(
+          'Sync conflict',
+          'Someone or something else changed the vault first. Your edit was discarded and the vault was refreshed with the latest version.',
+        );
+      } else {
+        Alert.alert(
+          'Could not sync',
+          `Your edit is saved locally but failed to sync: ${err instanceof Error ? err.message : 'unknown error'}`,
+        );
+      }
+      setScreen('vaultList');
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -93,7 +116,7 @@ export function EntryEditScreen() {
       <ToggleRow label="Symbols" value={genSymbols} onValueChange={setGenSymbols} />
       <Button title="Generate password" variant="secondary" onPress={handleGenerate} />
 
-      <Button title="Save" onPress={handleSave} style={styles.saveButton} />
+      <Button title="Save" onPress={handleSave} disabled={saving} style={styles.saveButton} />
       <Button title="Cancel" variant="secondary" onPress={() => setScreen('vaultList')} />
     </ScrollView>
   );

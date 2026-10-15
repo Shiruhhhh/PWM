@@ -1,9 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
 import { Button } from '../components/Button';
 import { useAuthStore } from '../state/authStore';
 import { useVaultStore } from '../state/vaultStore';
 import { copyWithAutoClear } from '../services/clipboard';
+import { pushVaultIfDirty, SyncConflictError } from '../services/vaultSync';
 
 /**
  * EntryDetailScreen per SCREENS_UX.md: view/copy fields, copy-to-clipboard
@@ -41,8 +42,23 @@ export function EntryDetailScreen() {
         title="Delete"
         variant="danger"
         style={styles.deleteButton}
-        onPress={() => {
+        onPress={async () => {
           removeEntry(entry.id);
+          try {
+            await pushVaultIfDirty();
+          } catch (err) {
+            if (err instanceof SyncConflictError) {
+              Alert.alert(
+                'Sync conflict',
+                'Someone or something else changed the vault first. Your delete was discarded and the vault was refreshed with the latest version.',
+              );
+            } else {
+              Alert.alert(
+                'Could not sync',
+                `Your delete is saved locally but failed to sync: ${err instanceof Error ? err.message : 'unknown error'}`,
+              );
+            }
+          }
           setScreen('vaultList');
         }}
       />

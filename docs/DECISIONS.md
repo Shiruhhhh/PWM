@@ -327,3 +327,17 @@ server never intended to allow.
 Tracked as **Phase 5** in `TASKS.md` (old Phase 5 "infra/deployment" renumbered to
 **Phase 6** — infra deploy cannot start until this phase, the rest of Phase 4's open
 items, and the 5 outstanding Phase 1-4 code-review findings are all resolved).
+
+### 23. `POST /cert/renew`'s response was missing `certId` — found during Phase 5 mobile implementation
+Same class of gap as #19 (missing `userId` in `/login`'s response): the device needs its
+own cert's `certId` to later call `/cert/revoke` on itself (e.g. SettingsScreen's "forget
+this device"), but `/cert/renew`'s response (`{ newCert }`) never returned it — only the
+new `client_certs` row's `id`, generated server-side and then discarded.
+
+- [x] Fix: `/cert/renew`'s response now also includes `certId`
+  (`packages/server/src/routes/certRenew.ts` — the handler already creates the row and
+  has its `id` in scope). Updated `certRenewResponseSchema` in
+  `packages/core/src/api/types.ts` and `docs/API_SPEC.md`. The mobile-side
+  `NativeMtlsClient.installCert()` now takes and persists `certId` alongside the cert
+  (both at `/cert/initial` time and every `/cert/renew`), surfaced via
+  `getActiveCertInfo()` for SettingsScreen to use.

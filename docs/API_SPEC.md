@@ -108,7 +108,10 @@ Body: `{ username, newClientSalt, newKdfParams, newAuthHash, newWrappedVaultKeyP
 Body: `{ csr }`
 - Validates session + current cert not expired/revoked.
 - Forwards CSR to CA signing LXC over internal mTLS link.
-- Returns: `{ newCert }`
+- Returns: `{ newCert, certId }`. `certId` (the new `client_certs` row's id) is required
+  so the device can later call `/cert/revoke` on its own cert (e.g. "forget this device"
+  in SettingsScreen) — originally omitted, found and fixed during Phase 5 mobile
+  implementation, see `docs/DECISIONS.md`.
 - Logs rotation in `client_certs`; old cert kept active for grace period until new one confirmed working, then revoked.
 
 ### `POST /cert/revoke` (session required)

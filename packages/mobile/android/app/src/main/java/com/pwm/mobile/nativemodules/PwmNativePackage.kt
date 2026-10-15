@@ -6,13 +6,14 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.module.model.ReactModuleInfo
 import com.facebook.react.module.model.ReactModuleInfoProvider
 
-/** Registers PWM's custom TurboModules (NativeArgon2, NativeKeystore). */
+/** Registers PWM's custom TurboModules (NativeArgon2, NativeKeystore, NativeMtlsClient). */
 class PwmNativePackage : BaseReactPackage() {
 
   override fun getModule(name: String, reactContext: ReactApplicationContext): NativeModule? =
     when (name) {
       Argon2Module.NAME -> Argon2Module(reactContext)
       KeystoreModule.NAME -> KeystoreModule(reactContext)
+      MtlsClientModule.NAME -> MtlsClientModule(reactContext)
       else -> null
     }
 
@@ -29,6 +30,14 @@ class PwmNativePackage : BaseReactPackage() {
       KeystoreModule.NAME to ReactModuleInfo(
         name = KeystoreModule.NAME,
         className = KeystoreModule.NAME,
+        canOverrideExistingModule = false,
+        needsEagerInit = false,
+        isCxxModule = false,
+        isTurboModule = true,
+      ),
+      MtlsClientModule.NAME to ReactModuleInfo(
+        name = MtlsClientModule.NAME,
+        className = MtlsClientModule.NAME,
         canOverrideExistingModule = false,
         needsEagerInit = false,
         isCxxModule = false,

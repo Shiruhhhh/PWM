@@ -33,6 +33,17 @@ jest.mock('../specs/NativeKeystore', () => ({
     removeItem: jest.fn(async () => undefined),
   },
 }));
+jest.mock('../specs/NativeMtlsClient', () => ({
+  __esModule: true,
+  default: {
+    generateKeyAndCsr: jest.fn(async () => ''),
+    installCert: jest.fn(async () => undefined),
+    isClientCertInstalled: jest.fn(async () => false),
+    getActiveCertInfo: jest.fn(async () => null),
+    deleteKeyAlias: jest.fn(async () => undefined),
+    request: jest.fn(async () => ({ status: 200, body: '{}', headersJson: '{}' })),
+  },
+}));
 
 import App from '../App';
 

@@ -2,7 +2,15 @@
  * @format
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { AppState, type AppStateStatus, StatusBar, StyleSheet, View } from 'react-native';
+import {
+  AppState,
+  type AppStateStatus,
+  StatusBar,
+  StyleSheet,
+  View,
+  ToastAndroid,
+  Platform,
+} from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { SetupScreen } from './src/screens/SetupScreen';
@@ -21,8 +29,10 @@ import { hasIdleTimeoutElapsed } from './src/state/idleTimer';
 import { loadCachedSession } from './src/services/sessionCache';
 import { getServerBaseUrl } from './src/services/config';
 import { isBiometricAvailable } from './src/native/keystore';
+import { isClientCertInstalled } from './src/native/mtlsClient';
 import { decryptVaultBlob } from './src/services/cryptoFlows';
 import { createApiClient } from './src/services/apiClient';
+import { checkAndRenewCertIfNeeded } from './src/services/certRenewal';
 
 type ColdStartState = 'checking' | 'ready';
 
@@ -54,10 +64,21 @@ function App() {
 
   const backgroundedAtRef = useRef<number | null>(null);
 
-  // Cold start: check for a cached, biometric-unlockable session.
+  // Cold start: check for an installed client cert (uncertified devices
+  // need SetupScreen's LAN-only bootstrap flow, not LoginScreen, which
+  // lives entirely behind the public mTLS listener per
+  // docs/DECISIONS.md #22) and a cached, biometric-unlockable session.
   useEffect(() => {
     (async () => {
       await loadSettings();
+
+      const certInstalled = await isClientCertInstalled();
+      if (!certInstalled) {
+        setColdStart('ready');
+        setScreen('setup');
+        return;
+      }
+
       const biometricAvailable = await isBiometricAvailable();
       setBiometricEnrolled(biometricAvailable);
 
@@ -96,6 +117,24 @@ function App() {
             vault.blobFormatVersion,
           );
           setEntries(blob.entries, vault.revision);
+
+          // Background cert-renewal check, per SCREENS_UX.md "Cert
+          // renewal" -- no dedicated screen, toast only. Doesn't block
+          // the cold-start flow; failures are surfaced but not fatal.
+          checkAndRenewCertIfNeeded(cached.sessionToken)
+            .then((status) => {
+              if (status && Platform.OS === 'android') {
+                ToastAndroid.show(status, ToastAndroid.LONG);
+              }
+            })
+            .catch((err: unknown) => {
+              if (Platform.OS === 'android') {
+                ToastAndroid.show(
+                  `Certificate renewal failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+                  ToastAndroid.LONG,
+                );
+              }
+            });
         }
 
         setScreen('vaultList');

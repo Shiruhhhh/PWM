@@ -3,10 +3,11 @@ import { View, Text, ScrollView, StyleSheet, Alert } from 'react-native';
 import { Button } from '../components/Button';
 import { TextField } from '../components/TextField';
 import { runSetupKeyDerivation, type SetupResult } from '../services/cryptoFlows';
-import { createApiClient } from '../services/apiClient';
-import { getServerBaseUrl } from '../services/config';
+import { createBootstrapApiClient } from '../services/apiClient';
+import { getBootstrapBaseUrl } from '../services/config';
 import { cacheSessionForBiometricUnlock } from '../services/sessionCache';
 import { bytesToBase64 } from '../native/base64';
+import { generateCsr, installCert } from '../native/mtlsClient';
 import { useAuthStore } from '../state/authStore';
 import { useVaultStore } from '../state/vaultStore';
 import { useVaultKeyStore } from '../state/vaultKeyStore';
@@ -87,12 +88,17 @@ export function SetupScreen() {
 
     setSubmitting(true);
     try {
-      const baseUrl = await getServerBaseUrl();
-      if (!baseUrl) {
-        throw new Error('server address not configured');
+      const bootstrapBaseUrl = await getBootstrapBaseUrl();
+      if (!bootstrapBaseUrl) {
+        throw new Error(
+          'bootstrap server address not configured -- connect to your home LAN/VPN first',
+        );
       }
-      const api = createApiClient({ baseUrl });
-      const { userId } = await api.register({
+      const bootstrapApi = createBootstrapApiClient({ baseUrl: bootstrapBaseUrl });
+
+      // /register (LAN-only listener) auto-logs in on success -- same
+      // response shape /login would return, per docs/DECISIONS.md #22.
+      const registerResult = await bootstrapApi.register({
         username: setupResult.username,
         clientSalt: bytesToBase64(setupResult.clientSalt),
         kdfParams: setupResult.kdfParams,
@@ -101,18 +107,24 @@ export function SetupScreen() {
         wrappedVaultKeyRecovery: setupResult.wrappedVaultKeyRecoveryBase64,
       });
 
-      // /register doesn't issue a session -- log in immediately after,
-      // same as a returning user would, per API_SPEC.md.
-      const loginResult = await api.login({
-        username: setupResult.username,
-        authHash: setupResult.authKeyBase64,
+      // Immediately get this device's first client cert -- still on the
+      // LAN-only listener, using the session /register just returned.
+      const { csr, deviceCn, tempAlias } = await generateCsr();
+      const bootstrapApiWithSession = createBootstrapApiClient({
+        baseUrl: bootstrapBaseUrl,
+        sessionToken: registerResult.sessionToken,
       });
+      const certResult = await bootstrapApiWithSession.certInitial({ csr, deviceCn });
+      await installCert(tempAlias, certResult.cert, certResult.certId);
+      // From this point on, the device presents this cert via the
+      // public mTLS listener for everything -- no further LAN/VPN
+      // requirement, ever (see docs/DECISIONS.md #22).
 
       await cacheSessionForBiometricUnlock(
         {
           vaultKey: setupResult.vaultKey,
-          sessionToken: loginResult.sessionToken,
-          userId,
+          sessionToken: registerResult.sessionToken,
+          userId: registerResult.userId,
           username: setupResult.username,
         },
         'Confirm to secure your vault',
@@ -120,8 +132,8 @@ export function SetupScreen() {
 
       setVaultKey(setupResult.vaultKey);
       setSession({
-        sessionToken: loginResult.sessionToken,
-        userId,
+        sessionToken: registerResult.sessionToken,
+        userId: registerResult.userId,
         username: setupResult.username,
       });
       setEntries([], 0); // freshly registered account -- empty vault, revision 0

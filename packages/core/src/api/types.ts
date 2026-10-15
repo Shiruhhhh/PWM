@@ -112,6 +112,7 @@ export type CertRenewRequest = z.infer<typeof certRenewRequestSchema>;
 
 export const certRenewResponseSchema = z.object({
   newCert: z.string(),
+  certId: z.string().uuid(),
 });
 export type CertRenewResponse = z.infer<typeof certRenewResponseSchema>;
 

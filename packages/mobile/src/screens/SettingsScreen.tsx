@@ -8,6 +8,9 @@ import { useVaultKeyStore } from '../state/vaultKeyStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { clearCachedSession } from '../services/sessionCache';
 import { deleteVaultKeystoreKey, isBiometricAvailable } from '../native/keystore';
+import { getActiveCertInfo, deleteKeyAlias } from '../native/mtlsClient';
+import { createApiClient } from '../services/apiClient';
+import { getServerBaseUrl } from '../services/config';
 
 /**
  * SettingsScreen per SCREENS_UX.md: idle timeout (configurable),
@@ -16,6 +19,7 @@ import { deleteVaultKeystoreKey, isBiometricAvailable } from '../native/keystore
  */
 export function SettingsScreen() {
   const setScreen = useAuthStore((s) => s.setScreen);
+  const sessionToken = useAuthStore((s) => s.sessionToken);
   const clearSession = useAuthStore((s) => s.clearSession);
   const clearVault = useVaultStore((s) => s.clear);
   const clearVaultKey = useVaultKeyStore((s) => s.clear);
@@ -49,21 +53,40 @@ export function SettingsScreen() {
   }
 
   // NOTE: SCREENS_UX.md's "manage devices/certs -- list, revoke action
-  // per device" isn't fully implemented here. A real "manage devices"
-  // list (fetching client_certs for the account, POST /cert/revoke per
-  // device) is deferred -- this button only clears local state (the
-  // device-side half of "lost my phone"), it does not call the server's
-  // /cert/revoke. Tracked as remaining work, not silently claimed done.
+  // per device" only covers THIS device here -- a real multi-device
+  // list (fetching all of the account's client_certs, revoking a
+  // DIFFERENT device remotely) isn't built; that's what the /admin/*
+  // plane's certs/:certId/revoke is for (an admin acting on someone
+  // else's behalf), not a per-user multi-device UI. This button does
+  // call /cert/revoke now, on the device's own active cert.
   async function handleForgetDevice() {
     Alert.alert(
       'Forget this device',
-      'This clears your vault and login from this device. It does NOT revoke this device\'s certificate on the server yet -- that part of "manage devices" isn\'t built. Continue?',
+      "This revokes this device's certificate on the server and clears your vault and login from this device. Continue?",
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Forget device',
           style: 'destructive',
           onPress: async () => {
+            try {
+              const baseUrl = await getServerBaseUrl();
+              const certInfo = await getActiveCertInfo();
+              if (baseUrl && certInfo && sessionToken) {
+                const api = createApiClient({ baseUrl, sessionToken });
+                await api.certRevoke({ certId: certInfo.certId });
+                await deleteKeyAlias(certInfo.alias);
+              }
+            } catch (err) {
+              // Still proceed to clear local state even if the server
+              // call failed (e.g. no network) -- the device-side
+              // "forget" half should always succeed; the user can
+              // revoke server-side later via the admin plane if needed.
+              Alert.alert(
+                'Could not revoke on server',
+                `Local data was still cleared. ${err instanceof Error ? err.message : 'unknown error'}`,
+              );
+            }
             await deleteVaultKeystoreKey();
             await clearCachedSession();
             clearVault();

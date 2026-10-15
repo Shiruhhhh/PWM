@@ -45,7 +45,7 @@ export function registerCertRenewRoute(
         deviceCn: activeCert.certCn,
       });
 
-      await prisma.clientCert.create({
+      const newCertRow = await prisma.clientCert.create({
         data: {
           userId,
           certCn: activeCert.certCn,
@@ -57,7 +57,7 @@ export function registerCertRenewRoute(
 
       logCertEvent(request.log, { userId, event: 'renewed', certId: result.fingerprint });
 
-      return { newCert: result.cert };
+      return { newCert: result.cert, certId: newCertRow.id };
     },
   );
 }

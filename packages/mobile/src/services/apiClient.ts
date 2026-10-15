@@ -13,14 +13,22 @@ import type {
   CertRenewRequest,
   CertRenewResponse,
   CertRevokeRequest,
+  CertInitialRequest,
+  CertInitialResponse,
+  AdminRegistrationRequest,
+  AdminUsersResponse,
+  AdminSetUserAdminRequest,
 } from '@pwm/core';
+import { mtlsRequest, MtlsRequestError } from '../native/mtlsClient';
 
 /**
- * Thin fetch wrapper over API_SPEC.md's endpoints. mTLS client-cert
- * presentation is handled at the platform networking layer (Android's
- * TLS stack + the cert installed via /cert/renew), not here -- this
- * module only shapes requests/responses to match the zod schemas in
- * packages/core so server and client agree on wire format.
+ * Two separate clients per docs/DECISIONS.md #22's two-listener design:
+ * - createBootstrapApiClient: plain TLS (no client cert to present --
+ *   there isn't one yet), talks to the LAN/VPN-only listener. Used ONLY
+ *   for /register and /cert/initial, during first-device setup.
+ * - createApiClient: real mTLS (presents the active Keystore-backed
+ *   client cert via the native module -- RN's plain fetch can't do
+ *   this at all). Talks to the public listener, used for everything else.
  */
 export class ApiError extends Error {
   constructor(
@@ -40,13 +48,15 @@ export class RevisionConflictError extends ApiError {
   }
 }
 
-export interface ApiClientConfig {
+// ---- Bootstrap client (LAN-only listener, plain TLS, no client cert) ----
+
+export interface BootstrapApiClientConfig {
   baseUrl: string;
   sessionToken?: string;
 }
 
-async function request<T>(
-  config: ApiClientConfig,
+async function bootstrapRequest<T>(
+  config: BootstrapApiClientConfig,
   path: string,
   init: { method: string; body?: unknown },
 ): Promise<T> {
@@ -63,25 +73,62 @@ async function request<T>(
 
   if (!res.ok) {
     const body = await res.json().catch(() => undefined);
-    if (res.status === 409 && body && typeof body === 'object' && 'currentRevision' in body) {
-      throw new RevisionConflictError((body as RevisionConflictResponse).currentRevision);
-    }
     throw new ApiError(`request to ${path} failed: ${res.status}`, res.status, body);
   }
-
   if (res.status === 204) {
     return undefined as T;
   }
   return res.json() as Promise<T>;
 }
 
+export function createBootstrapApiClient(config: BootstrapApiClientConfig) {
+  return {
+    register: (body: RegisterRequest): Promise<RegisterResponse> =>
+      bootstrapRequest(config, '/register', { method: 'POST', body }),
+
+    certInitial: (body: CertInitialRequest): Promise<CertInitialResponse> =>
+      bootstrapRequest(config, '/cert/initial', { method: 'POST', body }),
+  };
+}
+
+export type BootstrapApiClient = ReturnType<typeof createBootstrapApiClient>;
+
+// ---- Main client (public mTLS listener) ----
+
+export interface ApiClientConfig {
+  baseUrl: string;
+  sessionToken?: string;
+}
+
+async function request<T>(
+  config: ApiClientConfig,
+  path: string,
+  init: { method: string; body?: unknown },
+): Promise<T> {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (config.sessionToken) {
+    headers.authorization = `Bearer ${config.sessionToken}`;
+  }
+
+  try {
+    const res = await mtlsRequest<T>(init.method, `${config.baseUrl}${path}`, headers, init.body);
+    return res.json;
+  } catch (err) {
+    if (err instanceof MtlsRequestError && err.status === 409) {
+      const body = err.body as RevisionConflictResponse | undefined;
+      throw new RevisionConflictError(body?.currentRevision ?? -1);
+    }
+    if (err instanceof MtlsRequestError) {
+      throw new ApiError(`request to ${path} failed: ${err.status}`, err.status ?? 0, err.body);
+    }
+    throw err;
+  }
+}
+
 export function createApiClient(config: ApiClientConfig) {
   return {
     getLoginParams: (username: string): Promise<LoginParamsResponse> =>
       request(config, `/login/params?username=${encodeURIComponent(username)}`, { method: 'GET' }),
-
-    register: (body: RegisterRequest): Promise<RegisterResponse> =>
-      request(config, '/register', { method: 'POST', body }),
 
     login: (body: LoginRequest): Promise<LoginResponse> =>
       request(config, '/login', { method: 'POST', body }),
@@ -107,6 +154,21 @@ export function createApiClient(config: ApiClientConfig) {
 
     certRevoke: (body: CertRevokeRequest): Promise<void> =>
       request(config, '/cert/revoke', { method: 'POST', body }),
+
+    adminSetRegistrationOpen: (body: AdminRegistrationRequest): Promise<void> =>
+      request(config, '/admin/registration', { method: 'PATCH', body }),
+
+    adminListUsers: (): Promise<AdminUsersResponse> =>
+      request(config, '/admin/users', { method: 'GET' }),
+
+    adminRevokeCert: (certId: string): Promise<void> =>
+      request(config, `/admin/certs/${encodeURIComponent(certId)}/revoke`, { method: 'POST' }),
+
+    adminSetUserAdmin: (userId: string, body: AdminSetUserAdminRequest): Promise<void> =>
+      request(config, `/admin/users/${encodeURIComponent(userId)}/admin`, {
+        method: 'PATCH',
+        body,
+      }),
   };
 }
 
