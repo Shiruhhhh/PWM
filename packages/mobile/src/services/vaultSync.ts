@@ -25,8 +25,22 @@ export class SyncConflictError extends Error {
  * overwrites local state with it, and throws SyncConflictError so the
  * caller can show a warning (per SCREENS_UX.md, the local edit that
  * triggered this push is LOST -- not merged, not retried).
+ *
+ * In-flight calls are serialized via `inFlight` -- overlapping callers
+ * (e.g. rapid double-tap on EntryDetailScreen's delete, or any two
+ * screens racing) queue onto the same promise chain instead of each
+ * snapshotting `dirty` and racing markSynced, which could otherwise
+ * drop a second caller's change silently.
  */
-export async function pushVaultIfDirty(): Promise<void> {
+let inFlight: Promise<void> = Promise.resolve();
+
+export function pushVaultIfDirty(): Promise<void> {
+  const next = inFlight.then(doPush, doPush);
+  inFlight = next;
+  return next;
+}
+
+async function doPush(): Promise<void> {
   const vaultState = useVaultStore.getState();
   if (!vaultState.dirty) {
     return;

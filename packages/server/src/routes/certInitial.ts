@@ -44,7 +44,7 @@ export function registerCertInitialRoute(
         },
       });
 
-      logCertEvent(request.log, { userId, event: 'issued', certId: result.fingerprint });
+      logCertEvent(request.log, { userId, event: 'issued', certId: cert.id });
 
       return reply.code(200).send({ cert: result.cert, certId: cert.id });
     },

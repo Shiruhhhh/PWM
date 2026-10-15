@@ -31,3 +31,33 @@ export async function getBootstrapBaseUrl(): Promise<string | null> {
 export async function setBootstrapBaseUrl(url: string): Promise<void> {
   await nativeStorage.setItem(BOOTSTRAP_URL_STORAGE_KEY, url);
 }
+
+/**
+ * Transient bridge for the register-succeeded-but-cert-initial-failed
+ * gap: /register (LAN listener) can't be safely retried once the
+ * username exists (409 forever), but its session token was never
+ * persisted anywhere, so a crash/retry between register and
+ * cert/initial had no way back in except re-registering under a new
+ * username. Persisted only for the duration of setup; cleared the
+ * moment cert/initial succeeds (see SetupScreen.tsx).
+ */
+const PENDING_SETUP_SESSION_KEY = 'pwm_pending_setup_session';
+
+export interface PendingSetupSession {
+  sessionToken: string;
+  userId: string;
+  username: string;
+}
+
+export async function getPendingSetupSession(): Promise<PendingSetupSession | null> {
+  const raw = await nativeStorage.getItem(PENDING_SETUP_SESSION_KEY);
+  return raw ? (JSON.parse(raw) as PendingSetupSession) : null;
+}
+
+export async function setPendingSetupSession(session: PendingSetupSession): Promise<void> {
+  await nativeStorage.setItem(PENDING_SETUP_SESSION_KEY, JSON.stringify(session));
+}
+
+export async function clearPendingSetupSession(): Promise<void> {
+  await nativeStorage.removeItem(PENDING_SETUP_SESSION_KEY);
+}

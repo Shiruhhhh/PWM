@@ -85,7 +85,7 @@ export function registerAdminRoutes(
       logCertEvent(request.log, {
         userId: cert.userId,
         event: 'revoked',
-        certId: cert.fingerprint,
+        certId: cert.id,
       });
 
       return reply.code(204).send();

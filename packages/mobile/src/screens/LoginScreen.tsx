@@ -14,6 +14,7 @@ import { bytesToBase64, base64ToBytes } from '../native/base64';
 import { useAuthStore } from '../state/authStore';
 import { useVaultStore } from '../state/vaultStore';
 import { useVaultKeyStore } from '../state/vaultKeyStore';
+import { runCertRenewalCheck } from '../services/certRenewal';
 
 /**
  * LoginScreen per SCREENS_UX.md: username + master password. Biometric
@@ -94,6 +95,13 @@ export function LoginScreen() {
         userId: loginResult.userId,
         username: trimmedUsername,
       });
+      // A manual /login means this device already has a valid cert
+      // (the public mTLS listener requires one) -- check renewal now,
+      // same as the cold-start/foreground paths, since a freshly
+      // re-installed app or a device that skipped foreground checks
+      // for a long time wouldn't otherwise get one until later.
+      runCertRenewalCheck(loginResult.sessionToken);
+
       setScreen('vaultList');
     } catch {
       // Generic message deliberately -- mirrors the server's own

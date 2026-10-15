@@ -55,7 +55,7 @@ export function registerCertRenewRoute(
         },
       });
 
-      logCertEvent(request.log, { userId, event: 'renewed', certId: result.fingerprint });
+      logCertEvent(request.log, { userId, event: 'renewed', certId: newCertRow.id });
 
       return { newCert: result.cert, certId: newCertRow.id };
     },

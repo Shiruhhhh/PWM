@@ -2,15 +2,7 @@
  * @format
  */
 import React, { useEffect, useRef, useState } from 'react';
-import {
-  AppState,
-  type AppStateStatus,
-  StatusBar,
-  StyleSheet,
-  View,
-  ToastAndroid,
-  Platform,
-} from 'react-native';
+import { AppState, type AppStateStatus, StatusBar, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { SetupScreen } from './src/screens/SetupScreen';
@@ -32,7 +24,7 @@ import { isBiometricAvailable } from './src/native/keystore';
 import { isClientCertInstalled } from './src/native/mtlsClient';
 import { decryptVaultBlob } from './src/services/cryptoFlows';
 import { createApiClient } from './src/services/apiClient';
-import { checkAndRenewCertIfNeeded } from './src/services/certRenewal';
+import { runCertRenewalCheck } from './src/services/certRenewal';
 
 type ColdStartState = 'checking' | 'ready';
 
@@ -121,20 +113,7 @@ function App() {
           // Background cert-renewal check, per SCREENS_UX.md "Cert
           // renewal" -- no dedicated screen, toast only. Doesn't block
           // the cold-start flow; failures are surfaced but not fatal.
-          checkAndRenewCertIfNeeded(cached.sessionToken)
-            .then((status) => {
-              if (status && Platform.OS === 'android') {
-                ToastAndroid.show(status, ToastAndroid.LONG);
-              }
-            })
-            .catch((err: unknown) => {
-              if (Platform.OS === 'android') {
-                ToastAndroid.show(
-                  `Certificate renewal failed: ${err instanceof Error ? err.message : 'unknown error'}`,
-                  ToastAndroid.LONG,
-                );
-              }
-            });
+          runCertRenewalCheck(cached.sessionToken);
         }
 
         setScreen('vaultList');
@@ -150,7 +129,10 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Idle lock on background per SCREENS_UX.md #3/#4.
+  // Idle lock on background per SCREENS_UX.md #3/#4, plus a renewal
+  // check on every foreground resume (not just cold start) -- a
+  // long-lived app that's only ever backgrounded/foregrounded, never
+  // fully killed, would otherwise never re-check cert expiry.
   useEffect(() => {
     function handleAppStateChange(next: AppStateStatus) {
       if (next === 'background' || next === 'inactive') {
@@ -168,6 +150,10 @@ function App() {
           clearVaultKey();
           clearSession();
           setScreen('login');
+          return;
+        }
+        if (sessionToken) {
+          runCertRenewalCheck(sessionToken);
         }
       }
     }

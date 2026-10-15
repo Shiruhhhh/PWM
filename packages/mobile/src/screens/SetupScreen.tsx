@@ -1,10 +1,16 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Alert } from 'react-native';
 import { Button } from '../components/Button';
 import { TextField } from '../components/TextField';
 import { runSetupKeyDerivation, type SetupResult } from '../services/cryptoFlows';
 import { createBootstrapApiClient } from '../services/apiClient';
-import { getBootstrapBaseUrl } from '../services/config';
+import {
+  getBootstrapBaseUrl,
+  getPendingSetupSession,
+  setPendingSetupSession,
+  clearPendingSetupSession,
+  type PendingSetupSession,
+} from '../services/config';
 import { cacheSessionForBiometricUnlock } from '../services/sessionCache';
 import { bytesToBase64 } from '../native/base64';
 import { generateCsr, installCert } from '../native/mtlsClient';
@@ -23,7 +29,7 @@ import { useVaultKeyStore } from '../state/vaultKeyStore';
  * Per explicit TASKS.md instruction: do not simplify step 3 to a checkbox.
  */
 
-type Step = 'account' | 'recoveryDisplay' | 'recoveryConfirm';
+type Step = 'account' | 'recoveryDisplay' | 'recoveryConfirm' | 'resumeCertOnly';
 
 export function SetupScreen() {
   const [step, setStep] = useState<Step>('account');
@@ -38,10 +44,30 @@ export function SetupScreen() {
   const [confirmInput, setConfirmInput] = useState('');
   const [confirmError, setConfirmError] = useState<string | undefined>();
 
+  // Register (LAN listener) succeeded, but cert/initial (same request,
+  // same listener) hasn't yet -- see findings: retapping "Confirm and
+  // finish setup" would otherwise call register() again with the same
+  // username and get a 409 forever, since the account now exists but
+  // has no cert. Once set, retries skip straight to cert/initial using
+  // this instead of calling register() again. Also restored from
+  // storage on mount (see effect below) so a crash/relaunch between
+  // register and cert/initial isn't a total dead end either.
+  const [pendingSession, setPendingSession] = useState<PendingSetupSession | null>(null);
+  const [resumeError, setResumeError] = useState<string | undefined>();
+
   const setScreen = useAuthStore((s) => s.setScreen);
   const setSession = useAuthStore((s) => s.setSession);
   const setEntries = useVaultStore((s) => s.setEntries);
   const setVaultKey = useVaultKeyStore((s) => s.setVaultKey);
+
+  useEffect(() => {
+    getPendingSetupSession().then((pending) => {
+      if (pending) {
+        setPendingSession(pending);
+        setStep('resumeCertOnly');
+      }
+    });
+  }, []);
 
   async function handleAccountStepSubmit() {
     if (username.trim().length === 0) {
@@ -107,46 +133,115 @@ export function SetupScreen() {
         wrappedVaultKeyRecovery: setupResult.wrappedVaultKeyRecoveryBase64,
       });
 
-      // Immediately get this device's first client cert -- still on the
-      // LAN-only listener, using the session /register just returned.
-      const { csr, deviceCn, tempAlias } = await generateCsr();
-      const bootstrapApiWithSession = createBootstrapApiClient({
-        baseUrl: bootstrapBaseUrl,
-        sessionToken: registerResult.sessionToken,
-      });
-      const certResult = await bootstrapApiWithSession.certInitial({ csr, deviceCn });
-      await installCert(tempAlias, certResult.cert, certResult.certId);
-      // From this point on, the device presents this cert via the
-      // public mTLS listener for everything -- no further LAN/VPN
-      // requirement, ever (see docs/DECISIONS.md #22).
-
-      await cacheSessionForBiometricUnlock(
-        {
-          vaultKey: setupResult.vaultKey,
-          sessionToken: registerResult.sessionToken,
-          userId: registerResult.userId,
-          username: setupResult.username,
-        },
-        'Confirm to secure your vault',
-      );
-
-      setVaultKey(setupResult.vaultKey);
-      setSession({
+      // Persist the session BEFORE attempting cert/initial -- if that
+      // call fails (or the app crashes/is killed), the account already
+      // exists server-side with no cert, and register() can never be
+      // retried (409 forever). Cleared as soon as cert/initial succeeds.
+      await setPendingSetupSession({
         sessionToken: registerResult.sessionToken,
         userId: registerResult.userId,
         username: setupResult.username,
       });
-      setEntries([], 0); // freshly registered account -- empty vault, revision 0
-      // Clear the recovery mnemonic and setup intermediate state from
-      // memory now that registration succeeded -- never persisted,
-      // never logged, per SCREENS_UX.md step 4.
-      setSetupResult(null);
-      setScreen('vaultList');
+
+      await finishCertInitialAndLogin(bootstrapBaseUrl, registerResult, setupResult.vaultKey);
     } catch (err) {
       Alert.alert('Setup failed', err instanceof Error ? err.message : 'unknown error');
     } finally {
       setSubmitting(false);
     }
+  }
+
+  /**
+   * Shared tail end of setup -- gets this device's first client cert
+   * (still on the LAN-only listener, using the session register() or a
+   * resumed pending session already produced) and lands the device in
+   * the signed-in state. Used by both the normal confirm-step path and
+   * the resume-after-crash path below.
+   */
+  async function finishCertInitialAndLogin(
+    bootstrapBaseUrl: string,
+    session: { sessionToken: string; userId: string },
+    vaultKey: Uint8Array | null,
+  ): Promise<void> {
+    const { csr, deviceCn, tempAlias } = await generateCsr();
+    const bootstrapApiWithSession = createBootstrapApiClient({
+      baseUrl: bootstrapBaseUrl,
+      sessionToken: session.sessionToken,
+    });
+    const certResult = await bootstrapApiWithSession.certInitial({ csr, deviceCn });
+    await installCert(tempAlias, certResult.cert, certResult.certId);
+    // From this point on, the device presents this cert via the
+    // public mTLS listener for everything -- no further LAN/VPN
+    // requirement, ever (see docs/DECISIONS.md #22).
+    await clearPendingSetupSession();
+
+    if (!vaultKey) {
+      // Resumed from a crash/relaunch -- the vault key only ever lived
+      // in memory and was never persisted (zero-knowledge: nothing
+      // server-side or on-disk can reproduce it), so the user has to
+      // unlock with their password now, same as any other device. The
+      // account + cert are fully set up either way.
+      setScreen('login');
+      return;
+    }
+
+    await cacheSessionForBiometricUnlock(
+      {
+        vaultKey,
+        sessionToken: session.sessionToken,
+        userId: session.userId,
+        username,
+      },
+      'Confirm to secure your vault',
+    );
+
+    setVaultKey(vaultKey);
+    setSession({
+      sessionToken: session.sessionToken,
+      userId: session.userId,
+      username,
+    });
+    setEntries([], 0); // freshly registered account -- empty vault, revision 0
+    // Clear the recovery mnemonic and setup intermediate state from
+    // memory now that setup succeeded -- never persisted, never
+    // logged, per SCREENS_UX.md step 4.
+    setSetupResult(null);
+    setScreen('vaultList');
+  }
+
+  async function handleResumeCertOnly() {
+    if (!pendingSession) return;
+    const bootstrapBaseUrl = await getBootstrapBaseUrl();
+    if (!bootstrapBaseUrl) {
+      setResumeError(
+        'bootstrap server address not configured -- connect to your home LAN/VPN first',
+      );
+      return;
+    }
+    setSubmitting(true);
+    setResumeError(undefined);
+    try {
+      await finishCertInitialAndLogin(bootstrapBaseUrl, pendingSession, null);
+    } catch (err) {
+      setResumeError(err instanceof Error ? err.message : 'cert setup failed, try again');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (step === 'resumeCertOnly' && pendingSession) {
+    return (
+      <ScrollView contentContainerStyle={styles.container}>
+        <Text style={styles.title}>Finish setting up this device</Text>
+        <Text style={styles.body}>
+          Your account &quot;{pendingSession.username}&quot; was created, but this device
+          hasn&apos;t received its certificate yet. Make sure you&apos;re connected to your home
+          LAN/VPN, then continue.
+        </Text>
+        {resumeError ? <Text style={styles.errorText}>{resumeError}</Text> : null}
+        <Button title="Continue" onPress={handleResumeCertOnly} disabled={submitting} />
+      </ScrollView>
+    );
   }
 
   if (step === 'account') {
@@ -232,4 +327,5 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   mnemonic: { fontSize: 16, lineHeight: 24, fontFamily: 'monospace', color: '#0f172a' },
+  errorText: { fontSize: 13, color: '#dc2626', marginBottom: 12 },
 });

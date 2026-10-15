@@ -341,3 +341,44 @@ new `client_certs` row's `id`, generated server-side and then discarded.
   `NativeMtlsClient.installCert()` now takes and persists `certId` alongside the cert
   (both at `/cert/initial` time and every `/cert/renew`), surfaced via
   `getActiveCertInfo()` for SettingsScreen to use.
+
+### 24. Phase 5 code review (second pass) — 4 findings, all fixed
+Peer review found 4 issues after the first Phase 5 commits landed:
+
+1. **`SetupScreen.tsx` dead end on register-success/cert-initial-failure.** If
+   `POST /cert/initial` failed (or the app crashed) right after `POST /register`
+   succeeded, the account existed server-side with no cert and no way back in —
+   retrying "Confirm and finish setup" called `register()` again with the same
+   username, which 409s forever. Fix: the session returned by `register()` is now
+   persisted (`services/config.ts`'s `setPendingSetupSession`/`getPendingSetupSession`/
+   `clearPendingSetupSession`, via existing unencrypted `nativeStorage` — non-sensitive,
+   just a session token) *before* calling `/cert/initial`, and cleared immediately after
+   it succeeds. `SetupScreen` checks for a pending session on mount and, if found, skips
+   straight to a new `resumeCertOnly` step that retries only `/cert/initial` — never
+   `register()` again. A resume can't restore the in-memory `vaultKey` (zero-knowledge:
+   it never touched disk or the server), so a resumed setup routes to `LoginScreen`
+   afterward instead of straight to the vault, same as any other device unlocking with
+   its password.
+2. **Cert renewal only ran once, at cold start.** `checkAndRenewCertIfNeeded` was wired
+   into the mount-only cold-start effect behind the biometric-cache resume path only —
+   never on `AppState` foreground, never after a manual `/login`. A long-lived app
+   (background/foreground repeatedly, never fully killed) or any non-biometric login
+   never got a renewal check again, risking an expired cert locking the device out of
+   the mTLS listener entirely. Fix: extracted a shared `runCertRenewalCheck` (toast
+   wrapper around `checkAndRenewCertIfNeeded`) into `services/certRenewal.ts`, now called
+   from three places — cold-start resume, `App.tsx`'s `AppState` foreground handler (when
+   not idle-locking), and `LoginScreen.tsx`'s manual-login success path.
+3. **Cert-issuance log events used `fingerprint` instead of the `certId` row id** in
+   `certInitial.ts`, `certRenew.ts`, and `admin.ts`'s revoke route — `certId` is typed and
+   named as the DB row id everywhere else, so this broke log-to-DB correlation
+   (`MONITORING.md`). Fix: all three now pass the actual `ClientCert` row `id`.
+4. **`vaultSync.ts`'s `pushVaultIfDirty()` had no in-flight guard.** Overlapping calls
+   (e.g. rapid double-tap on `EntryDetailScreen`'s delete, which — unlike
+   `EntryEditScreen`'s save — had no `saving` state disabling the button) each
+   snapshotted `dirty` independently and could race on `markSynced`, silently dropping a
+   second caller's change. Fix: `pushVaultIfDirty` now chains every call onto a
+   module-level `inFlight` promise so overlapping calls serialize instead of racing,
+   rather than adding a per-screen guard that would only cover one call site.
+
+Verified: full test suite (48 core + 39 server + 41 mobile + 32 ca-service = 160 tests),
+lint/format clean, both `./gradlew assembleDebug` and `assembleRelease` succeed.

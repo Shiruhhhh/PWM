@@ -1,3 +1,4 @@
+import { ToastAndroid, Platform } from 'react-native';
 import { createApiClient } from './apiClient';
 import { getServerBaseUrl } from './config';
 import { generateCsr, installCert, getActiveCertInfo, deleteKeyAlias } from '../native/mtlsClient';
@@ -61,4 +62,28 @@ export async function checkAndRenewCertIfNeeded(sessionToken: string): Promise<s
     await deleteKeyAlias(newAlias).catch(() => undefined);
     throw err;
   }
+}
+
+/**
+ * Fire-and-forget wrapper around checkAndRenewCertIfNeeded, surfacing
+ * its result/failure as an Android toast. Shared by App.tsx's
+ * cold-start resume, its AppState foreground handler, and
+ * LoginScreen's manual-login path -- the three places a session
+ * becomes "current" without the others having already checked.
+ */
+export function runCertRenewalCheck(sessionToken: string): void {
+  checkAndRenewCertIfNeeded(sessionToken)
+    .then((status) => {
+      if (status && Platform.OS === 'android') {
+        ToastAndroid.show(status, ToastAndroid.LONG);
+      }
+    })
+    .catch((err: unknown) => {
+      if (Platform.OS === 'android') {
+        ToastAndroid.show(
+          `Certificate renewal failed: ${err instanceof Error ? err.message : 'unknown error'}`,
+          ToastAndroid.LONG,
+        );
+      }
+    });
 }
