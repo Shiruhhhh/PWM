@@ -48,3 +48,16 @@ export function crlPath(): string {
 export function issuanceLogPath(): string {
   return `${config.dataDir}/issuance.log`;
 }
+
+// pwm-ca's own server identity for its mTLS listener, per
+// docs/CA_SERVICE_SPEC.md's "internal mTLS" requirement — generated once
+// by bootstrap.sh's step 3, signed by the same CA key that signs every
+// client cert (self-contained trust: pwm-ca trusts anyone the CA
+// vouches for, including itself).
+export function serverCertPath(): string {
+  return `${config.dataDir}/server.crt`;
+}
+
+export function serverKeyPath(): string {
+  return `${config.dataDir}/server.key`;
+}

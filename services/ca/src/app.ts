@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from 'fastify';
+import type { Server as HttpsServer } from 'node:https';
 import {
   serializerCompiler,
   validatorCompiler,
@@ -16,8 +17,35 @@ import {
   errorResponseSchema,
 } from './schemas.js';
 
-export function buildApp(): FastifyInstance {
-  const app = Fastify({ logger: true }).withTypeProvider<ZodTypeProvider>();
+export interface BuildAppOptions {
+  /**
+   * HTTPS + mTLS listener options, per docs/CA_SERVICE_SPEC.md's
+   * "internal mTLS" requirement. Omitted in tests (Fastify's `.inject()`
+   * bypasses the real network listener regardless) and left undefined
+   * falls back to plain HTTP, matching the previous behavior.
+   */
+  https?: {
+    cert: string;
+    key: string;
+    ca: string;
+    requestCert: boolean;
+    rejectUnauthorized: boolean;
+  };
+}
+
+export function buildApp(options: BuildAppOptions = {}): FastifyInstance<HttpsServer> {
+  // Fastify's TS overloads pick the http/https/http2 server type from
+  // whether `https` is present in the options object -- buildApp's own
+  // return type is the plain FastifyInstance either way (the https
+  // branch is runtime-identical except for which server class Node
+  // constructs internally), so the https-server generic is picked
+  // explicitly here rather than relying on overload inference, which
+  // would otherwise force every route handler below into a server-type
+  // union depending on which branch ran.
+  const app = Fastify<HttpsServer>({
+    logger: true,
+    https: options.https ?? null,
+  }).withTypeProvider<ZodTypeProvider>();
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
 

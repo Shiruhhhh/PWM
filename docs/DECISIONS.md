@@ -382,3 +382,45 @@ Peer review found 4 issues after the first Phase 5 commits landed:
 
 Verified: full test suite (48 core + 39 server + 41 mobile + 32 ca-service = 160 tests),
 lint/format clean, both `./gradlew assembleDebug` and `assembleRelease` succeed.
+
+### 25. services/ca never actually implemented TLS/mTLS — found live during Phase 6 deploy
+`docs/CA_SERVICE_SPEC.md` says the `/sign`/`/revoke`/`/crl` endpoints are "internal
+mTLS", and `packages/server/src/lib/caClient.ts`'s `httpCaClient` was already built
+presenting a client cert via an undici `Agent`'s `connect.{cert,key,ca}` — but
+`services/ca/src/index.ts` only ever called `app.listen({port, host})` with no `https`
+option at all. Confirmed live on CT 202 (pwm-ca) during Phase 6: the service answered on
+plain `http://`, not `https://`. `caClient.ts`'s mTLS handshake would have had nothing to
+negotiate against — every `/sign`/`/revoke` call from pwm-app would fail once deployed.
+This was never caught by `app.test.ts`, since Fastify's `.inject()` (used by every
+existing test) bypasses the real network listener and TLS entirely.
+
+- [x] `services/ca/src/app.ts`'s `buildApp()` now takes an optional `BuildAppOptions.https`
+  (`{cert, key, ca, requestCert, rejectUnauthorized}`), passed straight through to
+  Fastify's own `https` constructor option. Omitted (tests, previous behavior) falls back
+  to plain HTTP. Needed an explicit `Fastify<https.Server>(...)` generic — Fastify's TS
+  overloads otherwise infer the server type per-branch and produce an unreconcilable
+  route-handler union if the `https`-vs-not choice happens inside the function.
+- [x] `services/ca/src/index.ts` now reads `server.crt`/`server.key`/`ca.crt` and passes
+  them as `https: {cert, key, ca, requestCert: true, rejectUnauthorized: true}` — real
+  mTLS enforcement at pwm-ca's own listener, not just relying on the Proxmox firewall
+  rule (defense in depth, matches `CA_SERVICE_SPEC.md`'s explicit wording).
+- [x] `services/ca/scripts/bootstrap.sh` gained a new step 2/3: generates pwm-ca's own
+  server keypair and self-signs it with the CA key (same CA that signs every client
+  cert), with a `subjectAltName=IP:<server-ip>` extension — required because
+  Node/undici's TLS verification checks SAN against the connection hostname/IP, not just
+  CN, and `httpCaClient` connects directly to pwm-ca's IP. `-copy_extensions copy` on the
+  `openssl x509 -req` signing step was needed too — it drops CSR extensions (including
+  SAN) by default otherwise. Verified locally: SAN present in the final cert, chain
+  verifies against `ca.crt`.
+- [x] New `services/ca/src/tls.test.ts` — real end-to-end mTLS test over an actual
+  network listener (`app.listen()` + a real fetch, not `.inject()`): accepts a request
+  presenting a CA-signed client cert, rejects one with no client cert, rejects one with a
+  client cert signed by a *different* CA. This is the test category that would have
+  caught this gap originally — added specifically because `.inject()`-only coverage
+  missed it.
+- [x] `config.ts` gained `serverCertPath()`/`serverKeyPath()`.
+- Deploying this fix to the already-running CT 202 requires re-running (an updated)
+  bootstrap or manually generating the server cert against the existing CA key, then
+  restarting the service — tracked as a Phase 6 resume step, not done automatically by
+  this commit (the CA key must never be regenerated; only the new server cert needs
+  adding on top of it).
