@@ -22,7 +22,6 @@ COPY --from=build /app/packages/server/package.json packages/server/
 COPY --from=build /app/packages/server/dist packages/server/dist
 COPY --from=build /app/packages/server/prisma packages/server/prisma
 RUN pnpm install --frozen-lockfile --prod --filter @pwm/core --filter @pwm/server
-RUN pnpm --filter @pwm/server exec prisma generate --schema=prisma/schema.prisma
 
 WORKDIR /app/packages/server
 EXPOSE 3000

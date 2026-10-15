@@ -29,7 +29,6 @@ try {
     process.exit(1);
   });
 } catch (err) {
-  // eslint-disable-next-line no-console -- app.log isn't available if buildApp() itself threw
   console.error(err);
   process.exit(1);
 }
