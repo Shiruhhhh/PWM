@@ -15,6 +15,7 @@ services:
       - /etc/pwm-app-cert/ca.crt:/etc/pwm/ca.crt:ro
       - /etc/pwm-app-cert/bootstrap-server.crt:/etc/pwm/bootstrap-server.crt:ro
       - /etc/pwm-app-cert/bootstrap-server.key:/etc/pwm/bootstrap-server.key:ro
+      - /var/log/caddy:/var/log/caddy
     environment:
       - PWM_PUBLIC_HOST=${PWM_PUBLIC_HOST}
     depends_on:

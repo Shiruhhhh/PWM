@@ -159,15 +159,68 @@ Blocks Phase 6 (infra deploy) — do not start Phase 6 until this phase and the 
 
 Per `PROXMOX_NETWORK.md`, `BACKUP.md`, `MONITORING.md`, `DEPLOY.md`. Proxmox access: see memory (SSH key at `~/.ssh/pwm_proxmox`, host `192.168.1.254`, requires VPN connected) — ask the user to confirm VPN is up before attempting SSH. Do not start this phase until Phase 5 is fully complete and confirmed.
 
-- [ ] Create `pwm-app` VM/LXC, static IP `192.168.1.10`.
-- [ ] Create `pwm-ca` LXC, static IP `192.168.1.11`.
-- [ ] Write and apply Proxmox firewall rules (`/etc/pve/firewall/<vmid>.fw`) for both, allow-list per `PROXMOX_NETWORK.md` (including the LAN-only listener's restricted firewall rule from Phase 5) — confirm with user before applying, this changes live infra.
-- [ ] Add router port-forward: TCP 443 → `192.168.1.10:443`. **This is a user action on their router — confirm with user, don't assume remote access to the router itself.** Do NOT forward the LAN-only listener's port.
-- [ ] Bootstrap CA on `pwm-ca` (manual step, see Phase 3 runbook).
-- [ ] Deploy `pwm-app` containers via `docker compose up -d`.
-- [ ] Set up backup cron jobs per `BACKUP.md` (DB dump daily, `vzdump` weekly for both VM/LXC).
-- [ ] Set up basic uptime check + log rotation per `MONITORING.md`.
-- [ ] **Run a restore drill** — don't skip this, per `BACKUP.md` explicit action item.
+- [x] Create `pwm-app` VM/LXC, static IP `192.168.1.10`. (CT 201, Docker-in-LXC.)
+- [x] Create `pwm-ca` LXC, static IP `192.168.1.11`. (CT 202.)
+- [x] Write and apply Proxmox firewall rules (`/etc/pve/firewall/<vmid>.fw`) for both, allow-list per `PROXMOX_NETWORK.md` (including the LAN-only listener's restricted firewall rule from Phase 5) — confirmed with user before applying; verified live via direct connectivity tests (host SSH unaffected, both CTs correctly allow/deny per the rules).
+- [x] Add router port-forward: TCP 443 → `192.168.1.10:443`. User confirmed done on their own router.
+- [x] Bootstrap CA on `pwm-ca`. Re-bootstrapped once more mid-session as ECDSA P-256 (was Ed25519 — see `docs/DECISIONS.md` #29, a real Android device's TLS stack never offers ed25519 in its ClientHello).
+- [x] Deploy `pwm-app` containers via `docker compose up -d`. Found and fixed 3 real bugs only visible from an actual running deploy, not just a successful build (`docs/DECISIONS.md` #25-27): services/ca had no TLS at all, the Dockerfile's `prisma generate` step, and `crlPoller.ts`'s unauthenticated fetch. Then found and fixed 4 more real bugs only visible from an actual real-device end-to-end test (`docs/DECISIONS.md` #28-32): the LAN-only listener's self-signed cert (added app-side pinning), the Ed25519 CA itself, a Keystore digest-authorization gap, a session-token bug in the mobile app's login flow, and two missing Hermes JS-engine globals. Full register → save password → logout → login → vault-with-data cycle confirmed working end to end on the user's real phone.
+- [x] Set up backup cron jobs per `BACKUP.md` (DB dump daily, `vzdump` weekly for both VM/LXC). `infra/backup-db.sh` (CT 201, daily 3am) and `infra/backup-ca.sh` (CT 202, weekly Sun 4am) installed via cron, age-encrypted, manually test-run and verified on both — real backup files produced, decryption round-tripped successfully with the offline private key. `infra/restore-db.sh` written, not yet exercised (see restore drill below). Found the backup-drive path assumption (`/mnt/backup-drive/...`) didn't match reality — real drive is `/backups` on the Proxmox host (separate `sda4` partition, already used for `vzdump`) — fixed via `pct set <id> -mpX` bind mounts into each container (`/backups/pwm/db` → CT 201, `/backups/pwm/ca` → CT 202), with ownership corrected for each container's unprivileged UID mapping (host UID 100000 = container root). age identity generated offline on the user's own machine, private key kept there (not on either CT), only the public key (`age1390mme...`) deployed. `infra/pwm-logrotate.conf` installed on CT 201. Also fixed a real bug found along the way: `docker-compose.yml`'s Caddy service had no bind mount for `/var/log/caddy/` (the path `infra/Caddyfile`'s `log` blocks write to) — logs were being silently lost on every container recreate; added the mount, verified log files now persist on the host.
+- [x] Log rotation — done above, folded into the same pass (`infra/pwm-logrotate.conf`).
+- [ ] Uptime check — explicitly skipped per user ("no need for uptime monitoring"). Not doing this for v1.
+- [ ] **Run a restore drill** — not yet done, deliberately deferred by the user ("the drill can wait"). A real encrypted backup already exists and was confirmed decryptable with the offline key, so the pipeline is proven at the crypto level; the actual `restore-db.sh` end-to-end run (decrypt + `psql` restore into a real/test target) is the piece still outstanding. Don't let this slip indefinitely — it's the one BACKUP.md explicitly says not to skip.
+
+## Phase 7 — in-app update mechanism (v1.1, deferred — not blocking v1 release)
+
+Not part of v1 scope. Documented now so the design is captured while fresh; implement
+after Phase 6 is fully confirmed stable on real infra.
+
+**Problem**: this is a sideloaded app (no Play Store, by design — open source,
+self-hosted). Any code change (UI or native) currently requires a manual rebuild +
+reinstall via adb. Fine for 2 users during active development, not fine for any
+self-hoster running this for a real user base — "redo adb install for 300 phones" isn't
+a real update story.
+
+**Design, resolved after discussion with the user**:
+- **Not GitHub Releases** — a self-hoster forking this repo has their own users, their
+  own backend, their own signing key. Pointing updates at the upstream repo's releases
+  would be wrong (wrong binary, wrong trust anchor) and would leak "who's running this
+  fork" telemetry to the upstream maintainer, which the user explicitly doesn't want
+  ("they are not supposed to use my data").
+- **Not a separate updater app** — Android requires a human tap to confirm any APK
+  install regardless of which app initiates it (OS-level protection, no way around this
+  without root/system-app privileges, which is out of scope). A second app doesn't
+  remove that tap, just relocates it, while adding install-permission attack surface and
+  a second thing to install. Rejected.
+- **Chosen**: each self-hoster's own backend (the one every deployed app build is
+  already pointed at, via `SERVER_URL`/`BOOTSTRAP_URL` from Phase 5's `.env` work) serves
+  its own update check + APK, over the same mTLS connection the app already trusts — no
+  new trust setup, no shared infra between deployments, scales identically whether it's
+  serving 2 users or 300.
+
+**Scope**:
+- [ ] `GET /app/version` (mTLS listener, session required) — returns latest available
+  `versionCode`/`versionName` the backend has on file.
+- [ ] `GET /app/apk` (mTLS listener, session required) — serves the actual signed APK
+  file. Admin-only upload path to populate it (`POST /admin/app/upload` or a simple
+  documented file-drop location — decide which when implementing; either is fine for the
+  threat model, this isn't a secret, it's the same binary users already run).
+- [ ] Client: on launch/foreground, check `/app/version` against the installed app's own
+  `versionCode` (Android exposes this natively). If server's newer, show a dismissible,
+  non-blocking banner ("Update available — Update now"), not a forced update.
+- [ ] On tap: download APK via `/app/apk` (same authenticated connection), then trigger
+  Android's standard install flow (`Intent.ACTION_VIEW` on the downloaded file via
+  `FileProvider`, requires `REQUEST_INSTALL_PACKAGES` permission). User gets the normal
+  OS "Install this update?" confirmation — one tap, not automatable further, don't try to
+  bypass it.
+- [ ] Verified: since package name + release signing key stay constant across versions,
+  this is a normal Android app update, not a fresh install — all local data persists
+  automatically (Keystore mTLS cert, session, vault cache). No re-register/re-login/
+  re-pairing needed after an update. Document this explicitly so a self-hoster doesn't
+  assume otherwise.
+- [ ] Document the self-hoster's release process in `DEPLOY.md`: build + sign APK with
+  their own release keystore (same as today), place/upload it where the backend serves
+  it, bump the version the backend reports.
 
 ## Ground rules for the implementing agent
 

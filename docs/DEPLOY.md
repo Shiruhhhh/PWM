@@ -54,3 +54,21 @@
 
 - Semantic versioning (`v1.0.0` etc) once first stable release cut.
 - `cryptoSchemeVersion` / `blobFormatVersion` (from CRYPTO_SPEC.md) are independent of app release version — app version can bump without forcing a crypto/blob migration, and vice versa in rare cases.
+
+## Operations (backup, log rotation)
+
+Per `BACKUP.md` / `MONITORING.md`. Done once, as part of this deployment (see `TASKS.md` Phase 6 for the exact state):
+
+### Backups
+1. age identity generated **offline**, on the user's own machine — the private key never touched pwm-app or pwm-ca, only the public key (`age1...`) was deployed as `AGE_RECIPIENT`.
+2. `infra/backup-db.sh` installed on pwm-app (CT 201), cron daily 3am. `infra/backup-ca.sh` installed on pwm-ca (CT 202), cron weekly Sun 4am.
+3. Backup target: `/backups` is a separate partition on the Proxmox host (already used for `vzdump`), bind-mounted into each container at `/backups/pwm/db` (CT 201) / `/backups/pwm/ca` (CT 202) via `pct set <vmid> -mpX ...` on the Proxmox host — not something either script mounts itself. Ownership needed correcting for each container's unprivileged UID mapping (host UID 100000 = container root UID 0).
+4. Both scripts' `BACKUP_DIR` defaults match the above (`/backups/pwm/db`, `/backups/pwm/ca`) — override via the `BACKUP_DIR` env var if deployed differently elsewhere.
+5. Restore: `infra/restore-db.sh <dump-file>`, needs the offline age private key passed via `AGE_KEY_FILE`. **The actual restore drill (decrypt + real `psql` restore against a test target) is still outstanding** — per `BACKUP.md`'s explicit "don't skip this" — deliberately deferred, not forgotten (see `TASKS.md`).
+
+### Uptime check
+**Explicitly skipped for v1** — user's call, not doing external uptime monitoring at this scale right now. `MONITORING.md`'s guidance (point a free external monitor at `/health` over the public mTLS listener, expect a TLS handshake failure rather than 200 as the "server up" signal since there's no client cert to present) stays documented there if revisited later.
+
+### Log rotation
+- `infra/pwm-logrotate.conf` installed at `/etc/logrotate.d/pwm` on pwm-app.
+- `infra/Caddyfile`'s two `log` blocks write to `/var/log/caddy/*.log` inside the Caddy container — `docker-compose.yml` bind-mounts that path to the host (`/var/log/caddy`) so logrotate can actually reach the files and they survive a container recreate. (This bind mount was missing originally — logs were being silently discarded on every recreate until fixed.)
