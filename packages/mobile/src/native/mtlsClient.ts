@@ -120,3 +120,36 @@ export async function mtlsRequest<TResponseBody>(
     throw err;
   }
 }
+
+/**
+ * Same shape as mtlsRequest above, but for the LAN/VPN-only bootstrap
+ * listener (/register, /cert/initial) -- no client cert presented;
+ * pins against the bundled internal CA root instead of relying on
+ * system TLS trust, since that listener can never get a
+ * publicly-trusted cert. See docs/DECISIONS.md #28.
+ */
+export async function bootstrapPinnedRequest<TResponseBody>(
+  method: string,
+  url: string,
+  headers: Record<string, string>,
+  body?: unknown,
+): Promise<MtlsResponse<TResponseBody>> {
+  const result = await NativeMtlsClient.bootstrapRequest(
+    method,
+    url,
+    JSON.stringify(headers),
+    body === undefined ? null : JSON.stringify(body),
+  );
+
+  let json: TResponseBody;
+  try {
+    json =
+      result.body === ''
+        ? (undefined as TResponseBody)
+        : (JSON.parse(result.body) as TResponseBody);
+  } catch {
+    throw new MtlsRequestError(`non-JSON response body: ${result.body}`, result.status);
+  }
+
+  return { status: result.status, json };
+}

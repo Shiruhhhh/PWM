@@ -486,3 +486,224 @@ endpoint, `/crl` included — it was never exempted for being a read.
 - Verified against the real running stack on CT 201/202: `docker compose logs node-app`
   showed `crl_poll_failed` before this fix, clean (no error) after rebuilding and
   restarting with it.
+
+### 28. Mobile app can't trust the bootstrap listener's TLS cert via the system trust store — pinning against the internal CA root instead
+Found during the first real-device setup attempt: `/register` instantly failed with
+"network request failed" against the LAN-only `:8443` listener, even with the correct
+IP/port and real VPN/LAN connectivity confirmed. Root cause: `infra/Caddyfile`'s `:8443`
+block is a bare port with no hostname, so Caddy can never request a Let's Encrypt cert
+for it — with no explicit `tls` directive it falls back to its own ad-hoc self-signed
+cert, which Android's (or any mobile OS's) default trust store doesn't trust. RN's plain
+`fetch()` (what `apiClient.ts`'s `bootstrapRequest` used) has no way around that.
+
+A cert signed by our own internal CA would hit the identical problem — nothing on the
+device trusts that CA either, without manual per-device cert installation, which defeats
+the whole "no manual provisioning" point of a self-hosted app. Same for Caddy's `tls
+internal` option — still just an unknown CA as far as the OS is concerned.
+
+- [x] Give `:8443` an actual server cert, signed by the internal CA (reusing
+  `services/ca`'s existing bootstrap infrastructure) — `infra/Caddyfile`'s `:8443` block
+  now has an explicit `tls /etc/pwm/bootstrap-server.crt /etc/pwm/bootstrap-server.key`.
+  `docker-compose.yml` bind-mounts both from `/etc/pwm-app-cert/` (same host dir pwm-app's
+  own client cert already lives in).
+- [x] `services/ca/scripts/bootstrap.sh` documents the one-time CSR-transfer step to
+  generate this cert, same pattern as the existing pwm-app-client step (CN=pwm-app-bootstrap,
+  SAN=IP:192.168.1.10).
+- [x] The mobile app bundles the CA root cert itself as an Android asset
+  (`android/app/src/main/assets/pwm-ca-root.pem`) and pins against it — a new
+  `NativeMtlsClient.bootstrapRequest()` TurboModule method builds an OkHttp client with a
+  custom `X509TrustManager` that trusts ONLY this one root, bypassing the system trust
+  store entirely for this one connection. The real mTLS client used after setup
+  (`request()`) is untouched — it still trusts the system store for the public listener's
+  Let's Encrypt cert, per #22.
+- [x] `apiClient.ts`'s `bootstrapRequest` now goes through this pinned native path
+  (`bootstrapPinnedRequest` in `mtlsClient.ts`) instead of plain `fetch` — no client cert
+  presented either way (a brand-new device doesn't have one yet), just a different trust
+  path for the server side.
+- Still pending: the actual leaf cert (`bootstrap-server.crt`/`.key`) hasn't been generated
+  against the real CA yet, nor deployed to pwm-app's `/etc/pwm-app-cert/` or Caddy
+  restarted with it — that's a live-infra step requiring direct user confirmation, same
+  as every other change touching the deployed stack in Phase 6.
+- Gap: no automated test covers `apiClient.ts`'s `bootstrapRequest` (pre-existing —
+  `apiClient.ts` has no test file at all; the native module it calls can't easily be
+  exercised under Jest either). Verification is manual, on a real device, same as #25-#27.
+
+### 29. CA root/certs moved from Ed25519 to ECDSA P-256 — a real Android device's TLS stack never offers Ed25519 in its ClientHello
+Found while testing #28's pinning fix on a real device: `/register` consistently failed
+with `SSLV3_ALERT_HANDSHAKE_FAILURE` / `HANDSHAKE_FAILURE_ON_CLIENT_HELLO`, deterministically,
+on every retry, regardless of IP/port correctness, VPN vs. direct LAN, TLS version pinning
+(`TLSv1.3` vs. platform-default `TLS`), or Caddy's key-exchange group list (tested
+restricting to classical X25519 in case a post-quantum hybrid group was the culprit — it
+wasn't). `openssl s_client` from multiple vantage points (the Proxmox host, inside CT 201,
+and over the same VPN path the phone used) always succeeded against the identical server
+config, which narrowed this to something phone-specific.
+
+Root cause, confirmed via packet capture (`tcpdump` on CT 201, comparing the phone's real
+`ClientHello` against a working `openssl` one byte-for-byte): the phone's `signature_algorithms`
+extension (0x000d) listed `0403 0804 0401 0503 0805 0501 0806 0601 0201` — ECDSA
+(P-256/P-384/P-521), RSA-PSS, and RSA-PKCS1 variants (down to legacy `sha1`) — but **no
+`0807` (ed25519)** at all. Caddy's bootstrap-server leaf cert is Ed25519-only; given zero
+overlap between what the client claims to support and what the cert can sign with, Caddy
+sends a `FIN` right after reading the ClientHello — no `ServerHello`, no cert exchange, no
+chance for the app's trust-manager/pinning code (confirmed via diagnostic logging) to even
+be invoked. `openssl s_client`'s default sigalgs list always includes `ed25519`, which is
+why every server-side test looked completely healthy despite the real bug.
+
+- [x] `services/ca/scripts/bootstrap.sh`: every `openssl req -newkey ed25519` →
+  `-newkey ec -pkeyopt ec_paramgen_curve:P-256` (CA root, pwm-ca's own server cert,
+  pwm-app's client cert, the bootstrap-server leaf cert from #28 — all four).
+- [x] `services/ca/src/openssl.ts` needed no changes — `validateCsrKeyStrength` already
+  accepted `prime256v1` (P-256) as an approved EC curve, and the signing invocation's
+  `-sha256` digest flag is exactly right for ECDSA-SHA256 (it was a no-op for Ed25519's
+  own fixed internal hash before, now it's load-bearing).
+- Pending: the actual re-bootstrap (new CA key, reissue all four certs, redeploy to
+  pwm-ca/pwm-app, restart affected services) is a full re-run of Phase 6's CA bootstrap
+  chain — live-infra work requiring direct user confirmation before execution, same as
+  every other change touching the deployed stack. Only one test account exists under the
+  current (Ed25519) CA; user confirmed a clean re-bootstrap with no migration/preservation
+  needed.
+- Process note: this is the second time in this session a "server tests fine from every
+  angle, client fails every time" symptom turned out to be a real client-side TLS stack
+  capability gap, not a config bug — `openssl s_client`'s defaults (broad sigalg/cipher
+  support, explicit sigalgs flags available) make it a poor proxy for what a real mobile
+  OS's TLS stack actually offers. A packet capture comparing the two ClientHellos directly
+  settled it where guessing and incremental server-side tweaks (TLS version pinning, key
+  exchange group restriction) did not.
+- [x] Full re-bootstrap executed and verified live: new P-256 root/certs deployed to
+  pwm-ca and pwm-app, setup flow confirmed working on the real device afterward. Hit one
+  real bug along the way: `bootstrap.sh` runs interactively as root, but `pwm-ca.service`
+  runs as the restricted `pwm-ca:pwm-ca` systemd user (`ProtectSystem=strict`) — the
+  regenerated key/cert files were left `root:root`-owned, crashing the service with
+  `EACCES` on restart. Fixed by adding a `chown pwm-ca:pwm-ca` step to `bootstrap.sh`
+  itself (conditional on that user already existing, since a first-time bootstrap runs
+  before the systemd unit is installed).
+
+### 30. Real-device client-cert TLS signing: `INCOMPATIBLE_DIGEST` from Android Keystore
+Found testing #28/#29's fix on the real device: with the CA correctly on ECDSA P-256,
+`/register` and `/cert/initial` (the LAN-only listener, pinned against the CA root, no
+client cert) worked. But the very first attempt to actually USE the newly-issued device
+client cert — any request through the public mTLS listener, `request()` in
+`MtlsClientModule.kt` — failed deterministically with:
+```
+java.security.InvalidKeyException: Keystore operation failed
+Caused by: android.security.KeyStoreException: Incompatible digest (Error::Km(INCOMPATIBLE_DIGEST))
+```
+Multiple theories tested and ruled out, each confirmed wrong by direct on-device retest
+(not guessed around): widening `setDigests()` to SHA-256/384/512 (no change); StrongBox
+involvement (confirmed via `KeyInfo.securityLevel`/`isInsideSecureHardware` logging — the
+key was always TEE-backed, `setIsStrongBoxBacked(false)` was a no-op fix); `ks.setKeyEntry()`
+corrupting the key's authorizations when swapping in the real CA-signed cert over the
+Keystore's auto-generated self-signed placeholder (storing the real cert in
+SharedPreferences instead, never touching the Keystore-visible cert/key entry post-generation
+— no change); missing `X509ExtendedKeyManager` SSLEngine-aware overloads
+(`chooseEngineClientAlias`/`chooseEngineServerAlias`, since OkHttp/Conscrypt's TLS 1.3 path
+uses `SSLEngine`, not the legacy `Socket` API — added, no change); a transient Keystore
+daemon glitch (survived a full device reboot, no change).
+
+Real root cause: TLS's `CertificateVerify` signs a **pre-computed transcript hash**, not
+raw plaintext — Conscrypt's internal signing call uses `NONEwithECDSA` (sign over an
+already-hashed digest, no re-hashing), not `SHA256withECDSA` (which `KeystoreContentSigner`
+uses for CSR signing, and which worked fine). The key's `KeyGenParameterSpec` only
+authorized `DIGEST_SHA256`/`SHA384`/`SHA512` — `DIGEST_NONE` was never in the list, so
+Keystore2/KeyMint rejected the raw-digest signing operation outright every time, for every
+digest Conscrypt internally tried, matching the exact symptom (instant, deterministic,
+every attempt, regardless of which specific digest got probed).
+
+- [x] `generateKeyAndCsr()`'s `KeyGenParameterSpec` now calls
+  `.setDigests(DIGEST_NONE, DIGEST_SHA256, DIGEST_SHA384, DIGEST_SHA512)` — `NONE` added
+  alongside the existing SHA-2 family (not replacing it; `KeystoreContentSigner`'s own
+  `SHA256withECDSA` CSR signing still needs `SHA256` authorized).
+- [x] Added `chooseEngineClientAlias`/`chooseEngineServerAlias` overrides to
+  `SingleAliasKeyManager` regardless (correct per `X509ExtendedKeyManager`'s contract even
+  though it wasn't the fix here — Conscrypt's actual code path for a `SSLEngine`-based
+  connection should use these, not the legacy `Socket`-taking overloads).
+- [x] Kept the `setKeyEntry()`-avoidance fix (storing the real cert in SharedPreferences,
+  `installCert()` never touches the Keystore-visible cert chain after generation) even
+  though it was confirmed NOT the actual cause of this bug — ruling it out required
+  shipping it, and no reason to revert a working, already-tested change back to the
+  original `ks.setKeyEntry()` call. The Keystore-visible cert stays the original
+  self-signed placeholder forever; `buildSslContext()`/`getActiveCertInfo()` read the real
+  cert from the `ACTIVE_CERT_PEM_PREF_KEY` pref instead — this is the actual deployed
+  behavior, not `ks.setKeyEntry()`.
+- Verified live: user registered a fresh account, the device's client cert successfully
+  signed a real `PUT /vault` request (saving a password entry) with zero errors — the
+  first confirmed-working real mTLS request on an actual device, through the full
+  Keystore-signing path, in this project's history.
+- Added (then removed once confirmed fixed) a temporary diagnostic `console.error` in
+  `LoginScreen.tsx`'s catch block — the UI's error message is deliberately generic
+  (anti-enumeration), which made isolating a *different* bug (#31) much slower than it
+  needed to be. Worth remembering for future on-device debugging: a one-line temporary
+  `console.error(err)` before the generic `setError(...)` costs nothing and pays for
+  itself immediately.
+
+### 31. Login's second API client was never given the session token — `getVault()` always 401'd after a successful login
+Found immediately after #30 was confirmed fixed: login now completed the actual `POST
+/login` successfully (confirmed via `node-app` logs — `login_attempt, success: true` on
+every single attempt, including ones the user saw fail client-side), but the client showed
+the generic "login failed" error anyway, every time, for every account including a
+brand-new one that had just succeeded at register + a real vault save moments earlier.
+
+Root cause: `LoginScreen.tsx`'s `handleLogin()` builds one `ApiClient` instance via
+`createApiClient({ baseUrl })` *before* the session token exists (it's needed just to call
+`getLoginParams`/`login`, both of which are correctly session-free). After `login()`
+returns a `sessionToken`, the code kept using that SAME client instance for
+`api.getVault()` — a session-required endpoint (`requireSession` preHandler) — so the
+request carried no `Authorization` header at all, hitting `requireSession`'s
+missing-token branch and returning a 401. `SetupScreen.tsx` already had the correct
+pattern for this exact situation (`bootstrapApiWithSession`, a second client built once
+the session token is known) — `LoginScreen.tsx` just never followed it.
+
+- [x] `LoginScreen.tsx`: `getVault()` now goes through a new `apiWithSession` client,
+  built with `loginResult.sessionToken`, instead of reusing the token-less `api`.
+- [x] Found and fixed the same bug in `VaultListScreen.tsx`'s pull-to-refresh
+  (`onRefresh`) — same pattern, `createApiClient({ baseUrl })` with no `sessionToken`,
+  calling `getVault()`. Added `sessionToken` from `useAuthStore`, passed through to the
+  client, added to the `useCallback` dependency array.
+- [x] Checked every other `createApiClient(...)` call site
+  (`vaultSync.ts`, `certRenewal.ts`, `SettingsScreen.tsx`, `RecoveryScreen.tsx`) — all
+  already correctly pass `sessionToken` where one is needed; `RecoveryScreen.tsx`'s two
+  calls are deliberately session-free (recovery routes have no `requireSession`
+  preHandler server-side, by design — you've forgotten your password, there's no session
+  to have yet).
+- Process note: this bug existed in the code since Phase 5 (per the summary this session
+  continued from), survived that phase's review passes and the full test suite, and was
+  only ever actually reachable by exercising a real login against a real server on a real
+  device — `LoginScreen.tsx` has no test file (confirmed, same gap noted for
+  `apiClient.ts`/`SetupScreen.tsx` flows elsewhere in this doc), and nothing in the
+  existing test suite happens to construct two sequential API clients the way a real
+  login does. A real end-to-end device test caught something a long chain of unit/integration
+  tests and code review passes did not.
+
+### 32. Hermes also has no global `TextEncoder`/`TextDecoder` — same class of gap as the `crypto` polyfill
+Found right after #31 was fixed: login now worked for empty-vault accounts, but any
+account with at least one saved password entry failed with
+`ReferenceError: Property 'TextDecoder' doesn't exist` (an uncaught promise rejection,
+not routed through `LoginScreen.tsx`'s own catch block at all — Hermes threw before any
+of our error handling could run). Explains the earlier-observed pattern exactly:
+`Teste1`/empty-vault logins worked, `Teste2`/`Teste3` (both had a saved password) failed
+every time, consistently.
+
+Root cause: `@pwm/core`'s crypto code (`aad.ts`, `keyWrap.ts`) and the `@noble/*` crypto
+libraries it depends on use `TextEncoder` (confirmed directly in our own source) and
+transitively `TextDecoder` (not found in our own source directly, but clearly reachable
+through some encode/decode path only exercised once there's real vault content to
+process). Hermes doesn't implement either global, same gap class as the earlier
+`crypto.getRandomValues` fix from this session's crypto-polyfill work — except this one
+only manifests once there's actual non-empty data to encode/decode, so a brand-new,
+empty-vault account's register → login cycle never touches it at all, which is exactly
+why it stayed invisible through every earlier test this session (including #30's "first
+confirmed working real mTLS request" — that was still an empty vault).
+
+- [x] Added `text-encoding` as a dependency, imported and assigned to
+  `global.TextEncoder`/`global.TextDecoder` in `index.js`, right after the existing
+  `react-native-get-random-values` import. Unlike that package, `text-encoding` doesn't
+  self-install as a global on import — needs an explicit assignment, guarded with
+  `typeof ... === 'undefined'` so it's a no-op if a future RN/Hermes version ever adds
+  native support.
+- Process note: this is the SECOND Hermes-missing-standard-global bug found this session
+  (the first being `crypto.getRandomValues`), both only surfaced by a real device
+  exercising a code path that Jest's Node-based test environment never would (Node has
+  both globals natively, so nothing in the existing test suite could ever have caught
+  either gap). Worth deliberately auditing `@pwm/core` and its dependencies for any other
+  Web-standard global they assume exists, rather than waiting for each one to surface
+  one at a time on a real device.

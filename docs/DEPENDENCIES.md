@@ -27,7 +27,8 @@ Pin exact versions at implementation time, check for maintenance status/known CV
 - `react-native-ssl-pinning` — client cert (mTLS) + pinning support for networking. Fallback: custom native module around OkHttp if this proves insufficient.
 - `react-native-biometrics` — BiometricPrompt integration.
 - `react-native-encrypted-storage` — Keystore-backed local storage for wrapped vault blob cache + settings.
-- `react-native-get-random-values` — polyfill for `crypto.getRandomValues`, required before any `@noble/*` crypto calls work correctly in RN JS runtime (Hermes lacks native WebCrypto).
+- `react-native-get-random-values` — polyfill for `crypto.getRandomValues`, required before any `@noble/*` crypto calls work correctly in RN JS runtime (Hermes lacks native WebCrypto). Must be imported first, before anything else, in `index.js`.
+- `react-native-config` — bakes `packages/mobile/.env` (gitignored; see `.env.example`) into the compiled app at build time, exposed in JS as `Config.SERVER_URL`/`Config.BOOTSTRAP_URL`. Used as the default server address so a normal install never needs manual configuration; overridable at runtime via an "advanced" field on LoginScreen/SetupScreen, stored through the existing `nativeStorage` mechanism (not plain AsyncStorage).
 - `react-native-keychain` (alternative/companion to encrypted-storage, evaluate overlap — may only need one of the two).
 - Native Kotlin module (custom, no npm package) — Android Keystore key generation/wrap/unwrap with `setUserAuthenticationRequired(true)`, exposed to JS via RN bridge.
 

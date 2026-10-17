@@ -1,8 +1,10 @@
 /**
  * Self-hosted deployment target. Per PROXMOX_NETWORK.md/DEPLOY.md, each
- * install points at its own server -- not a hardcoded SaaS endpoint. A
- * real v1 build surfaces these as first-run "server address" fields;
- * stored (non-sensitive, just URLs) via nativeStorage once set.
+ * install points at its own server -- not a hardcoded SaaS endpoint.
+ * Baked into the APK at build time via react-native-config (packages/mobile/
+ * .env, gitignored -- see .env.example), so a normal install never has to
+ * touch this. Overridable at runtime (stored via nativeStorage) in case the
+ * DDNS host or LAN IP ever changes without a new APK build.
  *
  * Two separate URLs per docs/DECISIONS.md #22's two-listener design:
  * - serverBaseUrl: the public mTLS listener (port 443, DDNS hostname) --
@@ -11,13 +13,23 @@
  *   192.168.1.10:8443) -- only reachable while on the home LAN/VPN, only
  *   ever used for /register and /cert/initial during first-device setup.
  */
+import Config from 'react-native-config';
 import { nativeStorage } from '../native/keystore';
 
 const SERVER_URL_STORAGE_KEY = 'pwm_server_base_url';
 const BOOTSTRAP_URL_STORAGE_KEY = 'pwm_bootstrap_base_url';
 
+export function getDefaultServerBaseUrl(): string | null {
+  return Config.SERVER_URL ?? null;
+}
+
+export function getDefaultBootstrapBaseUrl(): string | null {
+  return Config.BOOTSTRAP_URL ?? null;
+}
+
 export async function getServerBaseUrl(): Promise<string | null> {
-  return nativeStorage.getItem(SERVER_URL_STORAGE_KEY);
+  const override = await nativeStorage.getItem(SERVER_URL_STORAGE_KEY);
+  return override ?? getDefaultServerBaseUrl();
 }
 
 export async function setServerBaseUrl(url: string): Promise<void> {
@@ -25,7 +37,8 @@ export async function setServerBaseUrl(url: string): Promise<void> {
 }
 
 export async function getBootstrapBaseUrl(): Promise<string | null> {
-  return nativeStorage.getItem(BOOTSTRAP_URL_STORAGE_KEY);
+  const override = await nativeStorage.getItem(BOOTSTRAP_URL_STORAGE_KEY);
+  return override ?? getDefaultBootstrapBaseUrl();
 }
 
 export async function setBootstrapBaseUrl(url: string): Promise<void> {

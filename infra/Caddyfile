@@ -59,7 +59,17 @@
 # by anything in this Caddy config itself. Hosts ONLY /register and
 # /cert/initial; everything else 404s here as defense in depth, on top
 # of the firewall-level restriction.
+#
+# No hostname here (bare port, not a domain), so Caddy can't request a
+# Let's Encrypt cert for it -- without an explicit `tls` directive it
+# falls back to its own ad-hoc self-signed cert, which no mobile OS
+# trusts by default. The mobile app can't use a normal HTTPS client for
+# this listener as a result; see docs/DECISIONS.md #28 -- it pins
+# against this exact cert (signed by our internal CA, reusing
+# services/ca's existing infra) instead of relying on system trust.
 :8443 {
+	tls /etc/pwm/bootstrap-server.crt /etc/pwm/bootstrap-server.key
+
 	@bootstrapOnlyRoutes path /register /cert/initial
 
 	# Same explicit-ordering reasoning as the public listener above:

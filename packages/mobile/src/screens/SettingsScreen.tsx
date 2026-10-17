@@ -9,7 +9,7 @@ import { useSettingsStore } from '../state/settingsStore';
 import { clearCachedSession } from '../services/sessionCache';
 import { deleteVaultKeystoreKey, isBiometricAvailable } from '../native/keystore';
 import { getActiveCertInfo, deleteKeyAlias } from '../native/mtlsClient';
-import { createApiClient } from '../services/apiClient';
+import { createSessionApiClient } from '../services/apiClient';
 import { getServerBaseUrl } from '../services/config';
 
 /**
@@ -73,7 +73,7 @@ export function SettingsScreen() {
               const baseUrl = await getServerBaseUrl();
               const certInfo = await getActiveCertInfo();
               if (baseUrl && certInfo && sessionToken) {
-                const api = createApiClient({ baseUrl, sessionToken });
+                const api = createSessionApiClient({ baseUrl, sessionToken });
                 await api.certRevoke({ certId: certInfo.certId });
                 await deleteKeyAlias(certInfo.alias);
               }

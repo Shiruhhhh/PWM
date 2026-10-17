@@ -1,5 +1,5 @@
 import { ToastAndroid, Platform } from 'react-native';
-import { createApiClient } from './apiClient';
+import { createSessionApiClient } from './apiClient';
 import { getServerBaseUrl } from './config';
 import { generateCsr, installCert, getActiveCertInfo, deleteKeyAlias } from '../native/mtlsClient';
 
@@ -34,7 +34,7 @@ export async function checkAndRenewCertIfNeeded(sessionToken: string): Promise<s
   if (!baseUrl) {
     return null;
   }
-  const api = createApiClient({ baseUrl, sessionToken });
+  const api = createSessionApiClient({ baseUrl, sessionToken });
 
   const oldAlias = activeCertInfo.alias;
   const oldCertId = activeCertInfo.certId;

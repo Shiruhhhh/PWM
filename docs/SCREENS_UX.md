@@ -17,7 +17,7 @@ packages/mobile/
 ### SetupScreen (first run)
 Two-phase flow, not a single screen:
 
-1. **Account step** — choose username, master password.
+1. **Account step** — choose username, master password. Bootstrap server address (LAN-only listener) defaults from `Config.BOOTSTRAP_URL` (baked in at build time via `packages/mobile/.env`) — a collapsed "Server address" link reveals an editable field only if it needs overriding without a new APK build.
 2. **RecoveryDisplayStep** — generate recovery key (32 random bytes → 24-word mnemonic or base58 string). Display full key once. User told to write it down / save securely. Tap "Continue" → key fully removed from screen render (not blurred/dimmed — unmounted).
 3. **RecoveryConfirmStep** — blind confirmation, not a checkbox:
    - Input field only, recovery key itself **not shown** on this screen.
@@ -31,6 +31,7 @@ Two-phase flow, not a single screen:
 ### LoginScreen
 - Username + master password.
 - Biometric prompt offered if already enrolled on this device.
+- Server address (public mTLS listener) defaults from `Config.SERVER_URL`, same baked-in/advanced-override pattern as SetupScreen's bootstrap address.
 
 ### VaultListScreen
 - Searchable list of entries.

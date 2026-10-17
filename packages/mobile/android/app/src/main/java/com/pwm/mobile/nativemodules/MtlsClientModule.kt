@@ -38,6 +38,7 @@ import javax.net.ssl.X509ExtendedKeyManager
 private const val KEYSTORE_PROVIDER = "AndroidKeyStore"
 private const val ACTIVE_CERT_ALIAS_PREF_KEY = "pwm_mtls_active_cert_alias"
 private const val ACTIVE_CERT_ID_PREF_KEY = "pwm_mtls_active_cert_id"
+private const val ACTIVE_CERT_PEM_PREF_KEY = "pwm_mtls_active_cert_pem"
 private const val PREFS_NAME = "pwm_mtls_state"
 private const val SIGNATURE_ALGORITHM = "SHA256withECDSA"
 
@@ -53,6 +54,13 @@ class MtlsClientModule(private val reactContext: ReactApplicationContext) :
   NativeMtlsClientSpec(reactContext) {
 
   private val scope = CoroutineScope(Dispatchers.IO)
+
+  // Cached mTLS OkHttpClient -- building one means a Keystore round-trip,
+  // a PEM parse, and a fresh TLS context init, all real cost if repeated
+  // on every single request (code review follow-up from docs/DECISIONS.md
+  // #30/#31). Keyed by alias so a cert/key change (installCert,
+  // deleteKeyAlias) invalidates it rather than serving a stale client.
+  @Volatile private var cachedMtlsClient: Pair<String, OkHttpClient>? = null
 
   override fun getName() = NAME
 
@@ -71,7 +79,29 @@ class MtlsClientModule(private val reactContext: ReactApplicationContext) :
           KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
         )
           .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
-          .setDigests(KeyProperties.DIGEST_SHA256)
+          // Some devices' StrongBox implementations have documented EC-signing
+          // bugs that surface exactly as INCOMPATIBLE_DIGEST during a TLS 1.3
+          // CertificateVerify, even though the key signs fine for other
+          // operations (e.g. the CSR itself, right after generation -- see
+          // docs/DECISIONS.md #30). Force TEE-backed instead of letting the
+          // platform pick StrongBox when both are available.
+          .setIsStrongBoxBacked(false)
+          // TLS's CertificateVerify signs a PRE-COMPUTED transcript hash --
+          // Conscrypt calls Signature with NONEwithECDSA (raw signing over
+          // an already-hashed digest), not SHA256withECDSA (which would
+          // re-hash the input). DIGEST_NONE must be an authorized digest
+          // for that to work; its absence here caused a real
+          // INCOMPATIBLE_DIGEST KeyMint error on every real-device TLS
+          // handshake attempt (see docs/DECISIONS.md #30), even though
+          // SHA256withECDSA (used by our own KeystoreContentSigner for CSR
+          // signing, which keeps using that algorithm, not NONE) worked
+          // fine under the SHA256/384/512-only version of this list.
+          .setDigests(
+            KeyProperties.DIGEST_NONE,
+            KeyProperties.DIGEST_SHA256,
+            KeyProperties.DIGEST_SHA384,
+            KeyProperties.DIGEST_SHA512,
+          )
           // Deliberately NO setUserAuthenticationRequired -- see class docstring.
           .build()
         keyGen.initialize(spec)
@@ -98,32 +128,53 @@ class MtlsClientModule(private val reactContext: ReactApplicationContext) :
   override fun installCert(tempAlias: String, certPem: String, certId: String, promise: Promise) {
     try {
       val ks = keyStore()
-      val entry = ks.getEntry(tempAlias, null) as? KeyStore.PrivateKeyEntry
-        ?: throw IllegalStateException("no key found for alias $tempAlias -- call generateKeyAndCsr first")
+      if (!ks.containsAlias(tempAlias)) {
+        throw IllegalStateException("no key found for alias $tempAlias -- call generateKeyAndCsr first")
+      }
 
+      // Validate the cert parses, but do NOT call ks.setKeyEntry() to swap
+      // it into the Keystore -- real-device testing found that replacing
+      // just the cert chain on an existing AndroidKeyStore EC key entry
+      // this way leaves the key unable to sign for TLS 1.3's
+      // CertificateVerify afterward (INCOMPATIBLE_DIGEST from Keystore2,
+      // even though the SAME key signs fine immediately after generation,
+      // before any setKeyEntry call -- see docs/DECISIONS.md #30). The
+      // Keystore-visible cert stays the original self-signed placeholder
+      // forever; the real CA-signed cert is stored here instead and used
+      // to build the TLS chain directly in buildSslContext(), while
+      // signing operations still go through the untouched Keystore key.
       val cf = CertificateFactory.getInstance("X.509")
-      val cert = cf.generateCertificate(ByteArrayInputStream(certPem.toByteArray())) as X509Certificate
-
-      // Replaces the self-signed placeholder cert that
-      // KeyPairGenerator/AndroidKeyStore attaches automatically with the
-      // real CA-signed one -- the private key itself is never re-imported
-      // (it can't leave the Keystore); only the cert chain changes.
-      ks.setKeyEntry(tempAlias, entry.privateKey, null, arrayOf<Certificate>(cert))
+      cf.generateCertificate(ByteArrayInputStream(certPem.toByteArray())) as X509Certificate
 
       prefs().edit()
         .putString(ACTIVE_CERT_ALIAS_PREF_KEY, tempAlias)
         .putString(ACTIVE_CERT_ID_PREF_KEY, certId)
+        .putString(ACTIVE_CERT_PEM_PREF_KEY, certPem)
         .apply()
+      cachedMtlsClient = null
       promise.resolve(null)
     } catch (e: Exception) {
       promise.reject("MTLS_INSTALL_CERT_FAILED", e.message, e)
     }
   }
 
+  private fun activeCertPem(): String? = prefs().getString(ACTIVE_CERT_PEM_PREF_KEY, null)
+
+  private fun parseActiveCert(): X509Certificate? {
+    val pem = activeCertPem() ?: return null
+    val cf = CertificateFactory.getInstance("X.509")
+    return cf.generateCertificate(ByteArrayInputStream(pem.toByteArray())) as X509Certificate
+  }
+
   override fun isClientCertInstalled(promise: Promise) {
     try {
       val alias = activeCertAlias()
-      promise.resolve(alias != null && keyStore().containsAlias(alias))
+      // Also require the PEM pref (#30) -- a device upgrading in-place
+      // from a pre-#30 build has the Keystore alias but never wrote that
+      // pref, which would otherwise route it past Setup into a LoginScreen
+      // that crashes every request via buildSslContext()'s
+      // "no active cert stored" IllegalStateException.
+      promise.resolve(alias != null && keyStore().containsAlias(alias) && activeCertPem() != null)
     } catch (e: Exception) {
       promise.reject("MTLS_CHECK_FAILED", e.message, e)
     }
@@ -137,7 +188,7 @@ class MtlsClientModule(private val reactContext: ReactApplicationContext) :
         promise.resolve(null)
         return
       }
-      val cert = keyStore().getCertificate(alias) as? X509Certificate
+      val cert = parseActiveCert()
       if (cert == null) {
         promise.resolve(null)
         return
@@ -158,6 +209,7 @@ class MtlsClientModule(private val reactContext: ReactApplicationContext) :
       if (ks.containsAlias(alias)) {
         ks.deleteEntry(alias)
       }
+      cachedMtlsClient?.let { if (it.first == alias) cachedMtlsClient = null }
       promise.resolve(null)
     } catch (e: Exception) {
       promise.reject("MTLS_DELETE_ALIAS_FAILED", e.message, e)
@@ -176,45 +228,94 @@ class MtlsClientModule(private val reactContext: ReactApplicationContext) :
         val alias = activeCertAlias()
           ?: throw IllegalStateException("no active client cert installed -- call installCert first")
 
-        val sslContext = buildSslContext(alias)
-        val client = OkHttpClient.Builder()
-          .sslSocketFactory(sslContext.socketFactory, systemDefaultTrustManager())
-          .build()
-
-        val headers = JSONObject(headersJson)
-        val requestBuilder = Request.Builder().url(url)
-        val keys = headers.keys()
-        while (keys.hasNext()) {
-          val key = keys.next()
-          requestBuilder.addHeader(key, headers.getString(key))
+        val cached = cachedMtlsClient
+        val client = if (cached != null && cached.first == alias) {
+          cached.second
+        } else {
+          val sslContext = buildSslContext(alias)
+          val built = OkHttpClient.Builder()
+            .sslSocketFactory(sslContext.socketFactory, systemDefaultTrustManager())
+            .build()
+          cachedMtlsClient = alias to built
+          built
         }
 
-        val mediaType = headers.optString("content-type", "application/json").toMediaTypeOrNull()
-        val requestBody = body?.toRequestBody(mediaType)
-
-        when (method.uppercase()) {
-          "GET" -> requestBuilder.get()
-          "POST" -> requestBuilder.post(requestBody ?: "".toRequestBody(mediaType))
-          "PUT" -> requestBuilder.put(requestBody ?: "".toRequestBody(mediaType))
-          "PATCH" -> requestBuilder.patch(requestBody ?: "".toRequestBody(mediaType))
-          "DELETE" -> requestBuilder.delete(requestBody)
-          else -> throw IllegalArgumentException("unsupported method: $method")
-        }
-
-        client.newCall(requestBuilder.build()).execute().use { response ->
-          val responseHeaders = JSONObject()
-          for (name in response.headers.names()) {
-            responseHeaders.put(name, response.header(name))
-          }
-          val result = com.facebook.react.bridge.Arguments.createMap()
-          result.putInt("status", response.code)
-          result.putString("body", response.body?.string() ?: "")
-          result.putString("headersJson", responseHeaders.toString())
-          promise.resolve(result)
-        }
+        val result = executeRequest(client, method, url, headersJson, body)
+        promise.resolve(result)
       } catch (e: Exception) {
         promise.reject("MTLS_REQUEST_FAILED", e.message, e)
       }
+    }
+  }
+
+  override fun bootstrapRequest(
+    method: String,
+    url: String,
+    headersJson: String,
+    body: String?,
+    promise: Promise,
+  ) {
+    scope.launch {
+      try {
+        // Same trust manager INSTANCE must back both the SSLContext and
+        // the OkHttpClient.Builder.sslSocketFactory() call below -- two
+        // separately-constructed instances (even if logically identical)
+        // can cause OkHttp's own trust-manager introspection (it reflects
+        // into the factory to find the X509TrustManager for later cert
+        // pinning/CertificatePinner checks) to mismatch.
+        val trustManager = pinnedCaTrustManager()
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, arrayOf<javax.net.ssl.TrustManager>(trustManager), null)
+
+        val client = OkHttpClient.Builder()
+          .sslSocketFactory(sslContext.socketFactory, trustManager)
+          .build()
+
+        val result = executeRequest(client, method, url, headersJson, body)
+        promise.resolve(result)
+      } catch (e: Exception) {
+        promise.reject("MTLS_BOOTSTRAP_REQUEST_FAILED", e.message, e)
+      }
+    }
+  }
+
+  private fun executeRequest(
+    client: OkHttpClient,
+    method: String,
+    url: String,
+    headersJson: String,
+    body: String?,
+  ): com.facebook.react.bridge.WritableMap {
+    val headers = JSONObject(headersJson)
+    val requestBuilder = Request.Builder().url(url)
+    val keys = headers.keys()
+    while (keys.hasNext()) {
+      val key = keys.next()
+      requestBuilder.addHeader(key, headers.getString(key))
+    }
+
+    val mediaType = headers.optString("content-type", "application/json").toMediaTypeOrNull()
+    val requestBody = body?.toRequestBody(mediaType)
+
+    when (method.uppercase()) {
+      "GET" -> requestBuilder.get()
+      "POST" -> requestBuilder.post(requestBody ?: "".toRequestBody(mediaType))
+      "PUT" -> requestBuilder.put(requestBody ?: "".toRequestBody(mediaType))
+      "PATCH" -> requestBuilder.patch(requestBody ?: "".toRequestBody(mediaType))
+      "DELETE" -> requestBuilder.delete(requestBody)
+      else -> throw IllegalArgumentException("unsupported method: $method")
+    }
+
+    client.newCall(requestBuilder.build()).execute().use { response ->
+      val responseHeaders = JSONObject()
+      for (name in response.headers.names()) {
+        responseHeaders.put(name, response.header(name))
+      }
+      val result = com.facebook.react.bridge.Arguments.createMap()
+      result.putInt("status", response.code)
+      result.putString("body", response.body?.string() ?: "")
+      result.putString("headersJson", responseHeaders.toString())
+      return result
     }
   }
 
@@ -226,7 +327,11 @@ class MtlsClientModule(private val reactContext: ReactApplicationContext) :
    */
   private fun buildSslContext(alias: String): SSLContext {
     val ks = keyStore()
-    val cert = ks.getCertificate(alias) as X509Certificate
+    // The real CA-signed cert, NOT ks.getCertificate(alias) -- that still
+    // holds the original self-signed placeholder, deliberately never
+    // overwritten (see installCert()'s docs/DECISIONS.md #30 comment).
+    val cert = parseActiveCert()
+      ?: throw IllegalStateException("no active cert stored -- call installCert first")
     val keyManager = SingleAliasKeyManager(alias, arrayOf(cert), ks)
 
     val sslContext = SSLContext.getInstance("TLS")
@@ -247,6 +352,30 @@ class MtlsClientModule(private val reactContext: ReactApplicationContext) :
       javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm(),
     )
     tmf.init(null as KeyStore?)
+    return tmf.trustManagers.filterIsInstance<javax.net.ssl.X509TrustManager>().first()
+  }
+
+  /**
+   * Trusts ONLY the internal CA root bundled at assets/pwm-ca-root.pem --
+   * the system trust store is deliberately NOT consulted. Used solely for
+   * the bootstrap (:8443) listener, which can never get a publicly-trusted
+   * cert (no hostname, LAN-only) and whose own self-signed fallback no
+   * mobile OS trusts by default. Pinning against our own CA root is the
+   * standard fix for "trust my own self-hosted backend" -- see
+   * docs/DECISIONS.md #28.
+   */
+  private fun pinnedCaTrustManager(): javax.net.ssl.X509TrustManager {
+    val cf = CertificateFactory.getInstance("X.509")
+    val caCert = reactContext.assets.open("pwm-ca-root.pem").use { cf.generateCertificate(it) }
+
+    val trustStore = KeyStore.getInstance(KeyStore.getDefaultType())
+    trustStore.load(null, null)
+    trustStore.setCertificateEntry("pwm-ca-root", caCert)
+
+    val tmf = javax.net.ssl.TrustManagerFactory.getInstance(
+      javax.net.ssl.TrustManagerFactory.getDefaultAlgorithm(),
+    )
+    tmf.init(trustStore)
     return tmf.trustManagers.filterIsInstance<javax.net.ssl.X509TrustManager>().first()
   }
 
@@ -281,6 +410,25 @@ private class SingleAliasKeyManager(
     keyType: String?,
     issuers: Array<out java.security.Principal>?,
     socket: java.net.Socket?,
+  ): String? = null
+
+  // TLS 1.3 via Conscrypt's SSLEngine-based path (what OkHttp actually
+  // uses, not the legacy Socket-based API) calls these engine-aware
+  // overloads instead of chooseClientAlias(..., Socket) above -- without
+  // overriding them, X509ExtendedKeyManager's default implementation may
+  // not correctly resolve to this alias during the real handshake, even
+  // though the Socket-based path (and anything that doesn't go through
+  // SSLEngine) works fine. See docs/DECISIONS.md #30.
+  override fun chooseEngineClientAlias(
+    keyType: Array<out String>?,
+    issuers: Array<out java.security.Principal>?,
+    engine: javax.net.ssl.SSLEngine?,
+  ) = alias
+
+  override fun chooseEngineServerAlias(
+    keyType: String?,
+    issuers: Array<out java.security.Principal>?,
+    engine: javax.net.ssl.SSLEngine?,
   ): String? = null
 
   override fun getCertificateChain(alias: String?): Array<X509Certificate> = chain

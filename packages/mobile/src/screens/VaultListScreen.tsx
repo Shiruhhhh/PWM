@@ -4,7 +4,7 @@ import { TextField } from '../components/TextField';
 import { Button } from '../components/Button';
 import { useAuthStore } from '../state/authStore';
 import { useVaultStore } from '../state/vaultStore';
-import { createApiClient } from '../services/apiClient';
+import { createSessionApiClient } from '../services/apiClient';
 import { getServerBaseUrl } from '../services/config';
 import { decryptVaultBlob } from '../services/cryptoFlows';
 import { decideSyncAction } from '../state/syncLogic';
@@ -28,6 +28,7 @@ export function VaultListScreen({ vaultKey }: VaultListScreenProps) {
   const setEntries = useVaultStore((s) => s.setEntries);
 
   const userId = useAuthStore((s) => s.userId);
+  const sessionToken = useAuthStore((s) => s.sessionToken);
   const setScreen = useAuthStore((s) => s.setScreen);
   const navigateToEntry = useAuthStore((s) => s.navigateToEntry);
 
@@ -40,12 +41,12 @@ export function VaultListScreen({ vaultKey }: VaultListScreenProps) {
   }, [entries, query]);
 
   const onRefresh = useCallback(async () => {
-    if (!userId) return;
+    if (!userId || !sessionToken) return;
     setRefreshing(true);
     try {
       const baseUrl = await getServerBaseUrl();
       if (!baseUrl) return;
-      const api = createApiClient({ baseUrl });
+      const api = createSessionApiClient({ baseUrl, sessionToken });
       const vault = await api.getVault();
 
       const action = decideSyncAction({
@@ -69,7 +70,7 @@ export function VaultListScreen({ vaultKey }: VaultListScreenProps) {
     } finally {
       setRefreshing(false);
     }
-  }, [userId, vaultKey, lastKnownSyncedRevision, dirty, setEntries]);
+  }, [userId, sessionToken, vaultKey, lastKnownSyncedRevision, dirty, setEntries]);
 
   return (
     <View style={styles.container}>

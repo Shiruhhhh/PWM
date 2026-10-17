@@ -23,7 +23,7 @@ import { getServerBaseUrl } from './src/services/config';
 import { isBiometricAvailable } from './src/native/keystore';
 import { isClientCertInstalled } from './src/native/mtlsClient';
 import { decryptVaultBlob } from './src/services/cryptoFlows';
-import { createApiClient } from './src/services/apiClient';
+import { createSessionApiClient } from './src/services/apiClient';
 import { runCertRenewalCheck } from './src/services/certRenewal';
 
 type ColdStartState = 'checking' | 'ready';
@@ -100,7 +100,7 @@ function App() {
         // pull the vault, per SCREENS_UX.md step 1.
         const baseUrl = await getServerBaseUrl();
         if (baseUrl) {
-          const api = createApiClient({ baseUrl, sessionToken: cached.sessionToken });
+          const api = createSessionApiClient({ baseUrl, sessionToken: cached.sessionToken });
           const vault = await api.getVault();
           const blob = decryptVaultBlob(
             vault.encryptedBlob,

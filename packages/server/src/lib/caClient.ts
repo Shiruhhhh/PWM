@@ -88,11 +88,21 @@ export function httpCaClient(
     },
   });
 
-  async function request(path: string, body: unknown): Promise<unknown> {
+  /**
+   * Shared by request()/get() below -- both just send/receive JSON over
+   * the same mTLS dispatcher, differing only in HTTP method and whether a
+   * body is sent. Kept as one implementation so error handling (the
+   * !res.ok check) can't silently diverge between the two call shapes.
+   */
+  async function sendRequest(
+    path: string,
+    init: { method: 'GET' | 'POST'; body?: unknown },
+  ): Promise<unknown> {
     const res = await fetchImpl(`${baseUrl}${path}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
+      method: init.method,
+      ...(init.body !== undefined
+        ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify(init.body) }
+        : {}),
       // @ts-expect-error -- undici-specific fetch option, not in the lib.dom.d.ts RequestInit type
       dispatcher,
     });
@@ -102,16 +112,12 @@ export function httpCaClient(
     return res.json();
   }
 
+  async function request(path: string, body: unknown): Promise<unknown> {
+    return sendRequest(path, { method: 'POST', body });
+  }
+
   async function get(path: string): Promise<unknown> {
-    const res = await fetchImpl(`${baseUrl}${path}`, {
-      method: 'GET',
-      // @ts-expect-error -- undici-specific fetch option, not in the lib.dom.d.ts RequestInit type
-      dispatcher,
-    });
-    if (!res.ok) {
-      throw new CaServiceUnavailableError(`pwm-ca ${path} failed: ${res.status}`);
-    }
-    return res.json();
+    return sendRequest(path, { method: 'GET' });
   }
 
   return {

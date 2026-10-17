@@ -6,6 +6,32 @@ on:
     branches: [main]
 
 jobs:
+  secret-scan:
+    # Safety net after docs/DECISIONS.md's DDNS/WAN-IP leak -- fails the
+    # build if a real .env file gets tracked, or if a known-sensitive
+    # hostname pattern shows up outside .env.example/placeholder docs.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: no tracked .env files (other than .env.example)
+        run: |
+          hits=$(git ls-files | grep -E '(^|/)\.env(\..+)?$' | grep -v '\.env\.example$' || true)
+          if [ -n "$hits" ]; then
+            echo "Tracked .env file(s) found -- these must never be committed:"
+            echo "$hits"
+            exit 1
+          fi
+      - name: no real DDNS/WAN-IP hostnames
+        run: |
+          # Known-sensitive patterns from a past leak (docs/DECISIONS.md).
+          # Extend this list if a new real hostname/IP is ever used.
+          hits=$(git grep -nE 'justdied\.com|ddns\.net' || true)
+          if [ -n "$hits" ]; then
+            echo "Known-sensitive hostname pattern found in tracked files:"
+            echo "$hits"
+            exit 1
+          fi
+
   lint:
     runs-on: ubuntu-latest
     steps:

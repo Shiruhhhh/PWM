@@ -1,4 +1,4 @@
-import { createApiClient, RevisionConflictError } from './apiClient';
+import { createSessionApiClient, RevisionConflictError } from './apiClient';
 import { getServerBaseUrl } from './config';
 import { encryptVaultBlob, decryptVaultBlob } from './cryptoFlows';
 import { useVaultStore } from '../state/vaultStore';
@@ -53,7 +53,7 @@ async function doPush(): Promise<void> {
     return;
   }
 
-  const api = createApiClient({ baseUrl, sessionToken: auth.sessionToken });
+  const api = createSessionApiClient({ baseUrl, sessionToken: auth.sessionToken });
   const blob = {
     version: VAULT_BLOB_FORMAT_VERSION as 1,
     entries: vaultState.entries,

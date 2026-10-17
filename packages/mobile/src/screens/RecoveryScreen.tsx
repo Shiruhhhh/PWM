@@ -3,7 +3,7 @@ import { Text, ScrollView, StyleSheet, Alert } from 'react-native';
 import { Button } from '../components/Button';
 import { TextField } from '../components/TextField';
 import { useAuthStore } from '../state/authStore';
-import { createApiClient } from '../services/apiClient';
+import { createUnauthenticatedApiClient } from '../services/apiClient';
 import { getServerBaseUrl } from '../services/config';
 import {
   unwrapVaultKeyFromRecovery,
@@ -54,7 +54,7 @@ export function RecoveryScreen() {
       if (!baseUrl) {
         throw new Error('server address not configured');
       }
-      const api = createApiClient({ baseUrl });
+      const api = createUnauthenticatedApiClient({ baseUrl });
 
       const { wrappedVaultKeyRecovery } = await api.getRecoveryWrappedKey(trimmedUsername);
       const vaultKey = unwrapVaultKeyFromRecovery(

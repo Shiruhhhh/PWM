@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Text, ScrollView, StyleSheet } from 'react-native';
 import { Button } from '../components/Button';
 import { TextField } from '../components/TextField';
@@ -7,8 +7,8 @@ import {
   unwrapVaultKeyFromPassword,
   decryptVaultBlob,
 } from '../services/cryptoFlows';
-import { createApiClient } from '../services/apiClient';
-import { getServerBaseUrl } from '../services/config';
+import { createUnauthenticatedApiClient, createSessionApiClient } from '../services/apiClient';
+import { getServerBaseUrl, setServerBaseUrl } from '../services/config';
 import { cacheSessionForBiometricUnlock } from '../services/sessionCache';
 import { bytesToBase64, base64ToBytes } from '../native/base64';
 import { useAuthStore } from '../state/authStore';
@@ -21,6 +21,11 @@ import { runCertRenewalCheck } from '../services/certRenewal';
  * unlock is a separate, earlier-checked path (app-root cold-start check,
  * see App.tsx) -- this screen is the fallback / fresh-login path, always
  * a full POST /login issuing a brand new session.
+ *
+ * Server address is normally invisible: it's baked into the APK at build
+ * time (packages/mobile/.env via react-native-config). The field below is
+ * a collapsed "Advanced" override, only needed if the DDNS host/LAN IP
+ * changes without a new APK build -- see docs/DECISIONS.md.
  */
 export function LoginScreen() {
   const [username, setUsername] = useState('');
@@ -28,10 +33,17 @@ export function LoginScreen() {
   const [error, setError] = useState<string | undefined>();
   const [submitting, setSubmitting] = useState(false);
 
+  const [showServerField, setShowServerField] = useState(false);
+  const [serverUrl, setServerUrlInput] = useState('');
+
   const setScreen = useAuthStore((s) => s.setScreen);
   const setSession = useAuthStore((s) => s.setSession);
   const setEntries = useVaultStore((s) => s.setEntries);
   const setVaultKey = useVaultKeyStore((s) => s.setVaultKey);
+
+  useEffect(() => {
+    getServerBaseUrl().then((url) => setServerUrlInput(url ?? ''));
+  }, []);
 
   async function handleLogin() {
     const trimmedUsername = username.trim();
@@ -43,11 +55,15 @@ export function LoginScreen() {
     setSubmitting(true);
 
     try {
+      const trimmedServerUrl = serverUrl.trim();
+      if (trimmedServerUrl.length > 0) {
+        await setServerBaseUrl(trimmedServerUrl);
+      }
       const baseUrl = await getServerBaseUrl();
       if (!baseUrl) {
         throw new Error('server address not configured');
       }
-      const api = createApiClient({ baseUrl });
+      const api = createUnauthenticatedApiClient({ baseUrl });
 
       // authKey is derivable from clientSalt/kdfParams alone (both come
       // back from /login/params, no server round trip needed yet).
@@ -70,7 +86,16 @@ export function LoginScreen() {
         loginResult.wrappedVaultKeyPassword,
       );
 
-      const vault = await api.getVault();
+      // api is unauthenticated -- getVault() (session-required, per
+      // API_SPEC.md) needs the session client instead, same pattern as
+      // SetupScreen.tsx's bootstrapApiWithSession. Without this, getVault()
+      // sent no Authorization header at all, failing requireSession's
+      // missing-token check every time (401) -- see docs/DECISIONS.md #31.
+      const apiWithSession = createSessionApiClient({
+        baseUrl,
+        sessionToken: loginResult.sessionToken,
+      });
+      const vault = await apiWithSession.getVault();
       const blob = decryptVaultBlob(
         vault.encryptedBlob,
         vaultKey,
@@ -131,6 +156,19 @@ export function LoginScreen() {
         error={error}
       />
       <Button title="Log in" onPress={handleLogin} disabled={submitting} />
+      {showServerField ? (
+        <TextField
+          label="Server address (advanced)"
+          value={serverUrl}
+          onChangeText={setServerUrlInput}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+      ) : (
+        <Text style={styles.advancedLink} onPress={() => setShowServerField(true)}>
+          Server address
+        </Text>
+      )}
     </ScrollView>
   );
 }
@@ -143,5 +181,11 @@ const styles = StyleSheet.create({
     marginBottom: 32,
     color: '#0f172a',
     textAlign: 'center',
+  },
+  advancedLink: {
+    marginTop: 24,
+    textAlign: 'center',
+    color: '#64748b',
+    fontSize: 13,
   },
 });

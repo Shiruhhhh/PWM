@@ -6,6 +6,7 @@ import { runSetupKeyDerivation, type SetupResult } from '../services/cryptoFlows
 import { createBootstrapApiClient } from '../services/apiClient';
 import {
   getBootstrapBaseUrl,
+  setBootstrapBaseUrl,
   getPendingSetupSession,
   setPendingSetupSession,
   clearPendingSetupSession,
@@ -55,6 +56,12 @@ export function SetupScreen() {
   const [pendingSession, setPendingSession] = useState<PendingSetupSession | null>(null);
   const [resumeError, setResumeError] = useState<string | undefined>();
 
+  // Advanced override for the LAN-only bootstrap listener's address --
+  // normally baked in from packages/mobile/.env, only needed if the LAN IP
+  // changed without a new APK build. Same pattern as LoginScreen's override.
+  const [showServerField, setShowServerField] = useState(false);
+  const [bootstrapUrl, setBootstrapUrlInput] = useState('');
+
   const setScreen = useAuthStore((s) => s.setScreen);
   const setSession = useAuthStore((s) => s.setSession);
   const setEntries = useVaultStore((s) => s.setEntries);
@@ -67,6 +74,7 @@ export function SetupScreen() {
         setStep('resumeCertOnly');
       }
     });
+    getBootstrapBaseUrl().then((url) => setBootstrapUrlInput(url ?? ''));
   }, []);
 
   async function handleAccountStepSubmit() {
@@ -85,6 +93,10 @@ export function SetupScreen() {
     setAccountError(undefined);
     setSubmitting(true);
     try {
+      const trimmedBootstrapUrl = bootstrapUrl.trim();
+      if (trimmedBootstrapUrl.length > 0) {
+        await setBootstrapBaseUrl(trimmedBootstrapUrl);
+      }
       const result = await runSetupKeyDerivation(username.trim(), password);
       setSetupResult(result);
       setStep('recoveryDisplay');
@@ -269,6 +281,19 @@ export function SetupScreen() {
           error={accountError}
         />
         <Button title="Continue" onPress={handleAccountStepSubmit} disabled={submitting} />
+        {showServerField ? (
+          <TextField
+            label="Bootstrap server address (advanced)"
+            value={bootstrapUrl}
+            onChangeText={setBootstrapUrlInput}
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+        ) : (
+          <Text style={styles.advancedLink} onPress={() => setShowServerField(true)}>
+            Server address
+          </Text>
+        )}
       </ScrollView>
     );
   }
@@ -328,4 +353,10 @@ const styles = StyleSheet.create({
   },
   mnemonic: { fontSize: 16, lineHeight: 24, fontFamily: 'monospace', color: '#0f172a' },
   errorText: { fontSize: 13, color: '#dc2626', marginBottom: 12 },
+  advancedLink: {
+    marginTop: 24,
+    textAlign: 'center',
+    color: '#64748b',
+    fontSize: 13,
+  },
 });

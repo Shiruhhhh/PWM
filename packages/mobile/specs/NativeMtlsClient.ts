@@ -68,6 +68,23 @@ export interface Spec extends TurboModule {
     headersJson: string,
     body: string | null,
   ): Promise<{ status: number; body: string; headersJson: string }>;
+
+  /**
+   * Makes an HTTPS request to the LAN/VPN-only bootstrap listener
+   * (/register, /cert/initial -- see apiClient.ts's bootstrapRequest),
+   * pinning against the bundled internal CA root (assets/pwm-ca-root.pem)
+   * instead of the system trust store. That listener is a bare port with
+   * no hostname, so it can never get a publicly-trusted (Let's Encrypt)
+   * cert -- see docs/DECISIONS.md #28. No client cert is presented; a
+   * brand-new device doesn't have one yet, that's the whole point of
+   * this listener.
+   */
+  bootstrapRequest(
+    method: string,
+    url: string,
+    headersJson: string,
+    body: string | null,
+  ): Promise<{ status: number; body: string; headersJson: string }>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('NativeMtlsClient');

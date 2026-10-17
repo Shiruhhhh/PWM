@@ -35,6 +35,7 @@ export default tseslint.config(
       'packages/mobile/babel.config.js',
       'packages/mobile/jest.config.js',
       'packages/mobile/metro.config.js',
+      'packages/mobile/__mocks__/**/*.js',
     ],
     languageOptions: {
       sourceType: 'commonjs',
@@ -46,6 +47,17 @@ export default tseslint.config(
     },
     rules: {
       '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+  {
+    // index.js is RN's actual app entrypoint (not a Node-run config file
+    // like the block above) -- `global` here is React Native's JS runtime
+    // global object, used to install polyfills before anything else loads.
+    files: ['packages/mobile/index.js'],
+    languageOptions: {
+      globals: {
+        global: 'writable',
+      },
     },
   },
   {
