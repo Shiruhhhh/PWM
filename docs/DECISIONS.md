@@ -730,3 +730,35 @@ added to make that path actually exist inside the container.
   missing container mount by construction). Worth remembering when adding any future
   route that reads from the filesystem: check `docker-compose.yml` has the matching mount
   BEFORE considering the feature done, not after something fails against real infra.
+
+### 34. Phase 7's real-device test found 2 more bugs — stale deployed image, banner under the status bar
+Running the actual first end-to-end update test (install old build → in-place update to
+a build with the update code → deploy a newer version → confirm detection → tap update →
+confirm install + data survival) surfaced two real bugs, neither caught by the build/test
+suite/code review pass that preceded it:
+
+1. **Stale `node-app` image.** After #33's `docker-compose.yml` bind-mount fix was
+   applied and the container recreated, `GET /app/version` still 404'd — not the 503
+   error path built for a missing `version.json`, a plain 404, meaning Fastify didn't
+   even have the route registered. Root cause: "recreate the container" only picks up a
+   `docker-compose.yml` change; the `node-app` *image* itself was still built from a
+   commit before `appVersion.ts`/`appApk.ts` existed. Confirmed by checking the deployed
+   source tree directly on CT 201 — those files genuinely weren't there. Needed an actual
+   `docker compose build node-app` (not just `up -d`/recreate) to pick up the real route
+   code. Diagnosed via a temporary diagnostic toast added to `appUpdate.ts` (release
+   builds have no Metro console; a silently-caught error is otherwise invisible) — removed
+   again once the real cause was confirmed and fixed.
+2. **`UpdateBanner` rendered under the status bar/notch.** It's top-level chrome in
+   `App.tsx`, rendered as a sibling above `<Router>`, outside any screen's own layout —
+   nothing else in the app accounts for the safe area for it specifically. On a real
+   device with a camera cutout, the banner's buttons rendered underneath the system
+   status bar icons and were physically untappable. Fixed with `useSafeAreaInsets()` from
+   `react-native-safe-area-context` (already a dependency, just never previously used
+   anywhere in the app) added directly to `UpdateBanner.tsx`.
+
+Both bugs, plus #33, found and fixed only because the feature was actually exercised
+end-to-end on a real device rather than stopping at "the code compiles and the unit tests
+pass" — consistent with every other real bug found this session (#25-33). Full cycle
+verified working afterward: old build → in-place update preserving all local data →
+server-reports-newer detection → banner (correctly positioned) → tap-to-update →
+download → install → data still present.

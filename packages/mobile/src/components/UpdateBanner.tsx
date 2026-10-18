@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from './Button';
 import { useUpdateStore } from '../state/updateStore';
 import { useAuthStore } from '../state/authStore';
@@ -7,14 +8,21 @@ import { downloadAndInstallUpdate } from '../services/appUpdate';
 
 /**
  * Dismissible, non-blocking update banner per TASKS.md Phase 7 -- never a
- * forced update. Rendered once near the root (App.tsx), only visible
- * when updateStore.available is set (checkForUpdate found something
- * newer than the installed versionCode).
+ * forced update. Rendered once near the root (App.tsx), above the Router,
+ * only visible when updateStore.available is set (checkForUpdate found
+ * something newer than the installed versionCode).
+ *
+ * Needs its own top inset explicitly -- it's rendered as top-level chrome
+ * outside any screen's own ScrollView/layout, so nothing else accounts
+ * for the status bar/notch/dynamic island for it. Found on a real device
+ * with a camera cutout: without this, the buttons render underneath the
+ * system status bar icons and are untappable.
  */
 export function UpdateBanner() {
   const available = useUpdateStore((s) => s.available);
   const dismiss = useUpdateStore((s) => s.dismiss);
   const sessionToken = useAuthStore((s) => s.sessionToken);
+  const insets = useSafeAreaInsets();
 
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | undefined>();
@@ -42,7 +50,7 @@ export function UpdateBanner() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top + 10 }]}>
       <View style={styles.textContainer}>
         <Text style={styles.title}>Update available</Text>
         <Text style={styles.subtitle}>Version {available.versionName}</Text>

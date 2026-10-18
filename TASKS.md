@@ -224,14 +224,17 @@ a real update story.
   `FileProvider` `content://` Uri, `REQUEST_INSTALL_PACKAGES` permission added to the
   manifest). User gets the normal OS "Install this update?" confirmation — one tap, not
   automatable further, not bypassed.
-- [ ] **Verified on a real device**: since package name + release signing key stay
-  constant across versions, this should be a normal Android app update, not a fresh
-  install — local data (Keystore mTLS cert, session, vault cache) should persist
-  automatically, no re-register/re-login/re-pairing needed. Not yet confirmed with a real
-  `deploy-apk.sh` run + an actual on-device tap-to-update — the whole flow is built and
-  unit-tested, but (per this project's own `docs/DECISIONS.md` #25-32 track record) a
-  real device is what actually proves something like this works. Do this before calling
-  Phase 7 done.
+- [x] **Verified on a real device**: full cycle confirmed end to end — installed a
+  pre-update-code build (v1), manually updated in-place to v2 (first build with the
+  update-check code) and confirmed local data (session, vault, mTLS cert) survived with
+  no re-register/re-login needed. Deployed v3 to the server; v2 detected it, showed the
+  banner, and a real tap-to-update (download via `GET /app/apk` + Android's own install
+  confirmation) succeeded — confirmed vault/passwords still present afterward. Found and
+  fixed two real bugs this surfaced (`docs/DECISIONS.md` #34): the deployed `node-app`
+  image was stale (had the `docker-compose.yml` bind-mount fix but not the actual Phase 7
+  route code — `GET /app/version` 404'd until a real image rebuild), and the update
+  banner rendered underneath the status bar/notch on a real device (no safe-area inset
+  handling — fixed via `useSafeAreaInsets` in `UpdateBanner.tsx`).
 - [x] Documented the self-hoster's release process in `docs/DEPLOY.md`.
 
 ## Ground rules for the implementing agent
