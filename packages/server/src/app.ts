@@ -16,6 +16,8 @@ import { registerCertRenewRoute } from './routes/certRenew.js';
 import { registerCertRevokeRoute } from './routes/certRevoke.js';
 import { registerCertInitialRoute } from './routes/certInitial.js';
 import { registerAdminRoutes } from './routes/admin.js';
+import { registerAppVersionRoute } from './routes/appVersion.js';
+import { registerAppApkRoute } from './routes/appApk.js';
 import { startCrlPoller } from './lib/crlPoller.js';
 import { httpCaClient, type CaClient } from './lib/caClient.js';
 
@@ -101,6 +103,8 @@ export function buildApp(options: BuildAppOptions = {}): App {
   registerCertRevokeRoute(app, caClient);
   registerCertInitialRoute(app, caClient);
   registerAdminRoutes(app, caClient);
+  registerAppVersionRoute(app);
+  registerAppApkRoute(app);
 
   app.get('/health', async () => ({ status: 'ok' }));
 

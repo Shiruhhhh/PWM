@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Grants FileProvider access to this app's own cache dir, where the
+     downloaded update APK is written (see appUpdate.ts, downloadToFile);
+     nothing else needs exposing. -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="updates" path="updates/" />
+</paths>

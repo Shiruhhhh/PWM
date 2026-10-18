@@ -85,6 +85,18 @@ export interface Spec extends TurboModule {
     headersJson: string,
     body: string | null,
   ): Promise<{ status: number; body: string; headersJson: string }>;
+
+  /**
+   * Downloads a GET response's body directly to a local file, presenting
+   * the active client cert (same mTLS path as request()) -- for the
+   * in-app update APK download (TASKS.md Phase 7). Avoids round-tripping
+   * a multi-megabyte binary through the JS bridge as a string the way
+   * request()/bootstrapRequest() do for small JSON bodies. `destPath` is
+   * an absolute path this app has write access to (its own cache/files
+   * dir). Resolves with the HTTP status; throws on any non-2xx status or
+   * network/TLS failure, same error shape as request().
+   */
+  downloadToFile(url: string, headersJson: string, destPath: string): Promise<number>;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('NativeMtlsClient');

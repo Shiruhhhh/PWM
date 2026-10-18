@@ -71,6 +71,15 @@ export async function deleteKeyAlias(alias: string): Promise<void> {
   await NativeMtlsClient.deleteKeyAlias(alias);
 }
 
+/** Downloads a GET response's body straight to a local file -- see specs/NativeMtlsClient.ts's docstring for why this bypasses mtlsRequest()'s JSON-string path. */
+export async function mtlsDownloadToFile(
+  url: string,
+  headers: Record<string, string>,
+  destPath: string,
+): Promise<number> {
+  return NativeMtlsClient.downloadToFile(url, JSON.stringify(headers), destPath);
+}
+
 /**
  * Makes an mTLS request presenting the active client cert, per
  * THREAT_MODEL.md / docs/DECISIONS.md #22 -- RN's plain fetch can't

@@ -1,5 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   encrypt,
   decrypt,
@@ -740,5 +743,99 @@ describe('revoked client cert rejected on session-required routes', () => {
       headers: { authorization: `Bearer ${sessionToken}` },
     });
     expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('GET /app/version and GET /app/apk', () => {
+  const username = `dave-${Date.now()}`;
+  const password = 'dave-password-456';
+  let sessionToken: string;
+  let releasesDir: string;
+  let previousReleasesDirEnv: string | undefined;
+  const apkContents = Buffer.from('fake apk bytes, not a real zip, fine for a byte-stream test');
+
+  beforeAll(async () => {
+    const { authKey, vaultKey, vaultWrapKey } = await deriveKeys(username, password);
+    const wrappedByPassword = wrapVaultKey(vaultKey, vaultWrapKey, username);
+    const wrappedByRecovery = wrapVaultKey(vaultKey, generateRecoveryKey(), username);
+
+    const registerRes = await ctx.app.inject({
+      method: 'POST',
+      url: '/register',
+      payload: {
+        username,
+        clientSalt: Buffer.from(CLIENT_SALT).toString('base64'),
+        kdfParams: KDF_PARAMS,
+        authHash: Buffer.from(authKey).toString('base64'),
+        wrappedVaultKeyPassword: Buffer.from(wrappedByPassword).toString('base64'),
+        wrappedVaultKeyRecovery: Buffer.from(wrappedByRecovery).toString('base64'),
+      },
+    });
+    sessionToken = registerRes.json().sessionToken;
+
+    releasesDir = await mkdtemp(join(tmpdir(), 'pwm-app-releases-test-'));
+    await writeFile(
+      join(releasesDir, 'version.json'),
+      JSON.stringify({ versionCode: 7, versionName: '1.3.0' }),
+    );
+    await writeFile(join(releasesDir, 'app-release.apk'), apkContents);
+
+    previousReleasesDirEnv = process.env.APP_RELEASES_DIR;
+    process.env.APP_RELEASES_DIR = releasesDir;
+  });
+
+  afterAll(async () => {
+    process.env.APP_RELEASES_DIR = previousReleasesDirEnv;
+    await rm(releasesDir, { recursive: true, force: true });
+  });
+
+  it('GET /app/version requires a session', async () => {
+    const res = await ctx.app.inject({ method: 'GET', url: '/app/version' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('GET /app/version returns the version.json contents', async () => {
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/app/version',
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ versionCode: 7, versionName: '1.3.0' });
+  });
+
+  it('GET /app/apk requires a session', async () => {
+    const res = await ctx.app.inject({ method: 'GET', url: '/app/apk' });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it('GET /app/apk streams the APK file with the right content-type', async () => {
+    const res = await ctx.app.inject({
+      method: 'GET',
+      url: '/app/apk',
+      headers: { authorization: `Bearer ${sessionToken}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toBe('application/vnd.android.package-archive');
+    expect(Buffer.from(res.rawPayload)).toEqual(apkContents);
+  });
+
+  it('GET /app/version returns a generic 503 when version.json is missing, not a raw 500', async () => {
+    const emptyDir = await mkdtemp(join(tmpdir(), 'pwm-app-releases-empty-test-'));
+    const before = process.env.APP_RELEASES_DIR;
+    process.env.APP_RELEASES_DIR = emptyDir;
+
+    try {
+      const res = await ctx.app.inject({
+        method: 'GET',
+        url: '/app/version',
+        headers: { authorization: `Bearer ${sessionToken}` },
+      });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: 'version info unavailable' });
+    } finally {
+      process.env.APP_RELEASES_DIR = before;
+      await rm(emptyDir, { recursive: true, force: true });
+    }
   });
 });

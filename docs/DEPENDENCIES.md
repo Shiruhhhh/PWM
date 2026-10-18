@@ -31,6 +31,7 @@ Pin exact versions at implementation time, check for maintenance status/known CV
 - `react-native-config` — bakes `packages/mobile/.env` (gitignored; see `.env.example`) into the compiled app at build time, exposed in JS as `Config.SERVER_URL`/`Config.BOOTSTRAP_URL`. Used as the default server address so a normal install never needs manual configuration; overridable at runtime via an "advanced" field on LoginScreen/SetupScreen, stored through the existing `nativeStorage` mechanism (not plain AsyncStorage).
 - `react-native-keychain` (alternative/companion to encrypted-storage, evaluate overlap — may only need one of the two).
 - Native Kotlin module (custom, no npm package) — Android Keystore key generation/wrap/unwrap with `setUserAuthenticationRequired(true)`, exposed to JS via RN bridge.
+- `NativeAppInfo` (custom Kotlin TurboModule, no npm package) — reads the installed app's own `versionCode` via `PackageManager` and triggers the update-install flow via `FileProvider`/`Intent.ACTION_VIEW`, for the in-app update mechanism (`TASKS.md` Phase 7). Deliberately not `react-native-device-info` — one field, not worth the extra dependency surface.
 
 ## CA signing service (LXC, minimal)
 

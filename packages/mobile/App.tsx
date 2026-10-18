@@ -25,6 +25,8 @@ import { isClientCertInstalled } from './src/native/mtlsClient';
 import { decryptVaultBlob } from './src/services/cryptoFlows';
 import { createSessionApiClient } from './src/services/apiClient';
 import { runCertRenewalCheck } from './src/services/certRenewal';
+import { runUpdateCheck } from './src/services/appUpdate';
+import { UpdateBanner } from './src/components/UpdateBanner';
 
 type ColdStartState = 'checking' | 'ready';
 
@@ -114,6 +116,9 @@ function App() {
           // renewal" -- no dedicated screen, toast only. Doesn't block
           // the cold-start flow; failures are surfaced but not fatal.
           runCertRenewalCheck(cached.sessionToken);
+          // Update-available check, per TASKS.md Phase 7 -- same
+          // non-blocking, fire-and-forget pattern as cert renewal above.
+          runUpdateCheck(cached.sessionToken);
         }
 
         setScreen('vaultList');
@@ -154,6 +159,7 @@ function App() {
         }
         if (sessionToken) {
           runCertRenewalCheck(sessionToken);
+          runUpdateCheck(sessionToken);
         }
       }
     }
@@ -174,6 +180,7 @@ function App() {
     <SafeAreaProvider>
       <StatusBar barStyle="dark-content" />
       <View style={styles.container}>
+        <UpdateBanner />
         <Router screen={screen} />
       </View>
     </SafeAreaProvider>

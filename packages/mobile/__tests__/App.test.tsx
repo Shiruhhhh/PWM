@@ -42,6 +42,16 @@ jest.mock('../specs/NativeMtlsClient', () => ({
     getActiveCertInfo: jest.fn(async () => null),
     deleteKeyAlias: jest.fn(async () => undefined),
     request: jest.fn(async () => ({ status: 200, body: '{}', headersJson: '{}' })),
+    bootstrapRequest: jest.fn(async () => ({ status: 200, body: '{}', headersJson: '{}' })),
+    downloadToFile: jest.fn(async () => 200),
+  },
+}));
+jest.mock('../specs/NativeAppInfo', () => ({
+  __esModule: true,
+  default: {
+    getInstalledVersionCode: jest.fn(async () => 1),
+    installApk: jest.fn(async () => undefined),
+    getCacheDir: jest.fn(async () => '/tmp/test-cache'),
   },
 }));
 

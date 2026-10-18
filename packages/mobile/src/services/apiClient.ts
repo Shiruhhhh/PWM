@@ -18,6 +18,7 @@ import type {
   AdminRegistrationRequest,
   AdminUsersResponse,
   AdminSetUserAdminRequest,
+  AppVersionResponse,
 } from '@pwm/core';
 import { mtlsRequest, bootstrapPinnedRequest, MtlsRequestError } from '../native/mtlsClient';
 
@@ -206,6 +207,9 @@ export function createSessionApiClient(config: SessionApiClientConfig) {
         method: 'PATCH',
         body,
       }),
+
+    appVersion: (): Promise<AppVersionResponse> =>
+      request(config, '/app/version', { method: 'GET' }),
   };
 }
 

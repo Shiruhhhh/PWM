@@ -166,3 +166,10 @@ export const adminSetUserAdminRequestSchema = z.object({
   isAdmin: z.boolean(),
 });
 export type AdminSetUserAdminRequest = z.infer<typeof adminSetUserAdminRequestSchema>;
+
+// GET /app/version
+export const appVersionResponseSchema = z.object({
+  versionCode: z.number().int(),
+  versionName: z.string(),
+});
+export type AppVersionResponse = z.infer<typeof appVersionResponseSchema>;

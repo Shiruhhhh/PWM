@@ -72,3 +72,41 @@ Per `BACKUP.md` / `MONITORING.md`. Done once, as part of this deployment (see `T
 ### Log rotation
 - `infra/pwm-logrotate.conf` installed at `/etc/logrotate.d/pwm` on pwm-app.
 - `infra/Caddyfile`'s two `log` blocks write to `/var/log/caddy/*.log` inside the Caddy container — `docker-compose.yml` bind-mounts that path to the host (`/var/log/caddy`) so logrotate can actually reach the files and they survive a container recreate. (This bind mount was missing originally — logs were being silently discarded on every recreate until fixed.)
+
+## Releasing an app update (in-app update mechanism, Phase 7)
+
+Each self-hoster's own backend serves update checks and the APK itself — see
+`TASKS.md` Phase 7 for the full design reasoning (not GitHub Releases, not a
+separate updater app).
+
+1. Build and sign a new release APK, same as the very first install — see
+   `docs/INSTALL.md` "Build and install" (your existing release keystore,
+   same signing key every time: an Android app update requires the exact
+   same signing key as the version it's replacing, or the OS refuses it).
+2. On pwm-app, set `APP_RELEASES_DIR` (defaults to `/etc/pwm-app-releases`
+   if unset) in the `node-app` container's environment — this is where
+   `GET /app/version`/`GET /app/apk` read from.
+3. Copy `scripts/.env.example` to `scripts/.env`, fill in `DEPLOY_SSH_HOST`
+   (your SSH target for pwm-app) and `DEPLOY_REMOTE_DIR` (must match
+   `APP_RELEASES_DIR` above). Gitignored, never committed.
+4. Run:
+   ```bash
+   ./scripts/deploy-apk.sh \
+     packages/mobile/android/app/build/outputs/apk/release/app-release.apk \
+     <versionCode> <versionName>
+   ```
+   `versionCode` must be a plain integer, strictly greater than the
+   previous release's — this is what clients compare against their own
+   installed version (Android exposes `versionCode`, bumped in
+   `android/app/build.gradle`'s `defaultConfig`, to the app natively).
+5. Already-installed clients pick up the update on their next
+   launch/foreground check (or a manual login) — a dismissible banner
+   appears, "Update now" downloads and triggers Android's own install
+   confirmation. No server restart needed; the routes read the files
+   fresh on every request.
+
+Since package name + signing key stay constant, this is a normal in-place
+Android app update, not a fresh install — local data (the device's mTLS
+client certificate, cached session, vault cache) persists automatically.
+No self-hoster's users need to re-register or re-pair a device after an
+update.

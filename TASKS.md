@@ -197,30 +197,42 @@ a real update story.
   its own update check + APK, over the same mTLS connection the app already trusts — no
   new trust setup, no shared infra between deployments, scales identically whether it's
   serving 2 users or 300.
+- **APK publishing mechanism, resolved after further discussion**: not an admin-upload
+  API endpoint — a committed `scripts/deploy-apk.sh` (+ `.env.example`, gitignored real
+  `.env`, same convention as mobile/server's own) that scp's the built APK to pwm-app and
+  writes `version.json` in the same run. `GET /app/version`/`GET /app/apk` just read
+  static files from a known directory (`APP_RELEASES_DIR` env var) — no upload handler,
+  no multipart parsing, no admin-auth-gated write path to secure server-side.
 
 **Scope**:
-- [ ] `GET /app/version` (mTLS listener, session required) — returns latest available
-  `versionCode`/`versionName` the backend has on file.
-- [ ] `GET /app/apk` (mTLS listener, session required) — serves the actual signed APK
-  file. Admin-only upload path to populate it (`POST /admin/app/upload` or a simple
-  documented file-drop location — decide which when implementing; either is fine for the
-  threat model, this isn't a secret, it's the same binary users already run).
-- [ ] Client: on launch/foreground, check `/app/version` against the installed app's own
-  `versionCode` (Android exposes this natively). If server's newer, show a dismissible,
-  non-blocking banner ("Update available — Update now"), not a forced update.
-- [ ] On tap: download APK via `/app/apk` (same authenticated connection), then trigger
-  Android's standard install flow (`Intent.ACTION_VIEW` on the downloaded file via
-  `FileProvider`, requires `REQUEST_INSTALL_PACKAGES` permission). User gets the normal
-  OS "Install this update?" confirmation — one tap, not automatable further, don't try to
-  bypass it.
-- [ ] Verified: since package name + release signing key stay constant across versions,
-  this is a normal Android app update, not a fresh install — all local data persists
-  automatically (Keystore mTLS cert, session, vault cache). No re-register/re-login/
-  re-pairing needed after an update. Document this explicitly so a self-hoster doesn't
-  assume otherwise.
-- [ ] Document the self-hoster's release process in `DEPLOY.md`: build + sign APK with
-  their own release keystore (same as today), place/upload it where the backend serves
-  it, bump the version the backend reports.
+- [x] `GET /app/version` (mTLS listener, session required) — returns latest available
+  `versionCode`/`versionName` the backend has on file. `packages/server/src/routes/appVersion.ts`,
+  reads `version.json` from `APP_RELEASES_DIR` (default `/etc/pwm-app-releases`).
+- [x] `GET /app/apk` (mTLS listener, session required) — streams `app-release.apk` from
+  the same directory. `packages/server/src/routes/appApk.ts`.
+- [x] `scripts/deploy-apk.sh` + `scripts/.env.example` — scp's the APK + atomically
+  writes `version.json` to pwm-app over SSH, in one run.
+- [x] Client: on launch/foreground (and manual login), check `/app/version` against the
+  installed app's own `versionCode` via a new tiny native module (`NativeAppInfo`,
+  `getInstalledVersionCode()` via `PackageManager` — no `react-native-device-info`
+  dependency pulled in for one field). If server's newer, show a dismissible,
+  non-blocking banner (`UpdateBanner.tsx`), not a forced update.
+- [x] On tap: download APK via `/app/apk` (same authenticated mTLS connection — a new
+  `downloadToFile()` native method streams straight to disk rather than round-tripping a
+  multi-megabyte binary through the JS bridge as a string), then trigger Android's
+  standard install flow (`NativeAppInfo.installApk()`: `Intent.ACTION_VIEW` on a
+  `FileProvider` `content://` Uri, `REQUEST_INSTALL_PACKAGES` permission added to the
+  manifest). User gets the normal OS "Install this update?" confirmation — one tap, not
+  automatable further, not bypassed.
+- [ ] **Verified on a real device**: since package name + release signing key stay
+  constant across versions, this should be a normal Android app update, not a fresh
+  install — local data (Keystore mTLS cert, session, vault cache) should persist
+  automatically, no re-register/re-login/re-pairing needed. Not yet confirmed with a real
+  `deploy-apk.sh` run + an actual on-device tap-to-update — the whole flow is built and
+  unit-tested, but (per this project's own `docs/DECISIONS.md` #25-32 track record) a
+  real device is what actually proves something like this works. Do this before calling
+  Phase 7 done.
+- [x] Documented the self-hoster's release process in `docs/DEPLOY.md`.
 
 ## Ground rules for the implementing agent
 

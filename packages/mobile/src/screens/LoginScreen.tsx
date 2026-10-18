@@ -15,6 +15,7 @@ import { useAuthStore } from '../state/authStore';
 import { useVaultStore } from '../state/vaultStore';
 import { useVaultKeyStore } from '../state/vaultKeyStore';
 import { runCertRenewalCheck } from '../services/certRenewal';
+import { runUpdateCheck } from '../services/appUpdate';
 
 /**
  * LoginScreen per SCREENS_UX.md: username + master password. Biometric
@@ -126,6 +127,7 @@ export function LoginScreen() {
       // re-installed app or a device that skipped foreground checks
       // for a long time wouldn't otherwise get one until later.
       runCertRenewalCheck(loginResult.sessionToken);
+      runUpdateCheck(loginResult.sessionToken);
 
       setScreen('vaultList');
     } catch {

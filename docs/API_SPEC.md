@@ -164,6 +164,21 @@ Body: `{ isAdmin: boolean }`
 - Promotes (or demotes) another user's admin status. The only path for granting admin
   after the first user; no other bootstrap mechanism exists by design.
 
+## App update endpoints (public mTLS listener, session required)
+
+Per `TASKS.md` Phase 7 (in-app update mechanism). Not admin-gated — any authenticated
+user can check for and download an update, same as they can already run/reinstall the
+same APK themselves. Populated by `scripts/deploy-apk.sh`, not an upload API — see
+`docs/DEPLOY.md` "Releasing an app update".
+
+### `GET /app/version`
+- Returns: `{ versionCode: number, versionName: string }`, read from `version.json` in
+  `APP_RELEASES_DIR` (env var, default `/etc/pwm-app-releases`).
+
+### `GET /app/apk`
+- Streams `app-release.apk` from the same directory, `content-type:
+  application/vnd.android.package-archive`.
+
 ## Session TTL policy
 
 - Rolling 90-day TTL. Every authenticated request extends `expires_at` to `now() + 90 days` and bumps `last_used_at` — session only expires after 90 days of zero activity, not from a fixed login timestamp.

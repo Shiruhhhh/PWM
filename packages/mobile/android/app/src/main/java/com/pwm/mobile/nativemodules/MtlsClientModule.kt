@@ -319,6 +319,49 @@ class MtlsClientModule(private val reactContext: ReactApplicationContext) :
     }
   }
 
+  override fun downloadToFile(url: String, headersJson: String, destPath: String, promise: Promise) {
+    scope.launch {
+      try {
+        val alias = activeCertAlias()
+          ?: throw IllegalStateException("no active client cert installed -- call installCert first")
+
+        val cached = cachedMtlsClient
+        val client = if (cached != null && cached.first == alias) {
+          cached.second
+        } else {
+          val sslContext = buildSslContext(alias)
+          val built = OkHttpClient.Builder()
+            .sslSocketFactory(sslContext.socketFactory, systemDefaultTrustManager())
+            .build()
+          cachedMtlsClient = alias to built
+          built
+        }
+
+        val headers = JSONObject(headersJson)
+        val requestBuilder = Request.Builder().url(url).get()
+        val keys = headers.keys()
+        while (keys.hasNext()) {
+          val key = keys.next()
+          requestBuilder.addHeader(key, headers.getString(key))
+        }
+
+        client.newCall(requestBuilder.build()).execute().use { response ->
+          if (!response.isSuccessful) {
+            throw java.io.IOException("download failed: HTTP ${response.code}")
+          }
+          val body = response.body ?: throw java.io.IOException("empty response body")
+          java.io.File(destPath).parentFile?.mkdirs()
+          java.io.File(destPath).outputStream().use { out ->
+            body.byteStream().copyTo(out)
+          }
+          promise.resolve(response.code)
+        }
+      } catch (e: Exception) {
+        promise.reject("MTLS_DOWNLOAD_FAILED", e.message, e)
+      }
+    }
+  }
+
   /**
    * Builds an SSLContext presenting the Keystore-backed client cert via
    * a minimal X509ExtendedKeyManager wrapping the single active alias --
