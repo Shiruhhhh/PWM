@@ -707,3 +707,26 @@ confirmed working real mTLS request" — that was still an empty vault).
   either gap). Worth deliberately auditing `@pwm/core` and its dependencies for any other
   Web-standard global they assume exists, rather than waiting for each one to surface
   one at a time on a real device.
+
+### 33. `docker-compose.yml` had no bind mount for `APP_RELEASES_DIR` — same class of gap as the earlier `/var/log/caddy` miss
+Found before the first real `scripts/deploy-apk.sh` run (Phase 7): `GET /app/version`/
+`GET /app/apk` read from `APP_RELEASES_DIR` (default `/etc/pwm-app-releases`), and
+`deploy-apk.sh` writes the APK/`version.json` to that same path on the pwm-app host — but
+`docker-compose.yml`'s `node-app` service had no bind mount for it at all, so the
+container's filesystem would never actually see what the deploy script wrote. Identical
+root cause to #29's writeup elsewhere in this doc (the `/var/log/caddy` miss): a route
+was written against an env-var path without a corresponding volume entry ever being
+added to make that path actually exist inside the container.
+
+- [x] Added `/etc/pwm-app-releases:/etc/pwm-app-releases:ro` to `node-app`'s `volumes` in
+  `docker-compose.yml`, plus an explicit `APP_RELEASES_DIR=/etc/pwm-app-releases` in its
+  `environment` block (previously relying on the code's own default — made it explicit
+  here instead, matching how every other deploy-relevant path in this file is already
+  spelled out rather than left implicit).
+- Process note: this is the second time this exact class of bug (a server route reading
+  a host path with no corresponding Docker bind mount) has been caught before causing a
+  real outage, both times during live pre-deploy verification rather than by code review
+  or the test suite (which runs server code directly, outside Docker, so it can't catch a
+  missing container mount by construction). Worth remembering when adding any future
+  route that reads from the filesystem: check `docker-compose.yml` has the matching mount
+  BEFORE considering the feature done, not after something fails against real infra.

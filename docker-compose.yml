@@ -35,8 +35,12 @@ services:
       - CA_CLIENT_KEY_PATH=/etc/pwm-app-cert/pwm-app-client.key
       - CA_TRUST_CERT_PATH=/etc/pwm-app-cert/ca.crt
       - PORT=3000
+      - APP_RELEASES_DIR=/etc/pwm-app-releases
     volumes:
       - /etc/pwm-app-cert:/etc/pwm-app-cert:ro
+      # scripts/deploy-apk.sh writes here from the host side; node-app
+      # only ever reads (GET /app/version, GET /app/apk) -- read-only.
+      - /etc/pwm-app-releases:/etc/pwm-app-releases:ro
     depends_on:
       postgres:
         condition: service_healthy
