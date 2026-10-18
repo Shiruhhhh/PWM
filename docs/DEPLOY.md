@@ -86,10 +86,25 @@ separate updater app).
 2. On pwm-app, set `APP_RELEASES_DIR` (defaults to `/etc/pwm-app-releases`
    if unset) in the `node-app` container's environment — this is where
    `GET /app/version`/`GET /app/apk` read from.
-3. Copy `scripts/.env.example` to `scripts/.env`, fill in `DEPLOY_SSH_HOST`
+3. **Prerequisite**: `scripts/deploy-apk.sh` needs direct SSH reachability
+   from wherever you run it to the pwm-app host/container on port 22 (a
+   plain `scp`). This is true for many simple deployments, but not this
+   project's own reference Proxmox setup — `docs/PROXMOX_NETWORK.md`'s
+   firewall rules deliberately restrict pwm-app's SSH to the Proxmox host
+   itself, not arbitrary LAN machines (see `docs/DECISIONS.md` for the
+   full reasoning). If your topology is similarly locked down, either run
+   the script from a machine that does have SSH access (e.g. the Proxmox
+   host itself), or skip the script and do the equivalent two steps
+   manually with whatever access method you do have (`pct push`, a
+   different remote-copy tool, etc.) — copy the APK to
+   `${APP_RELEASES_DIR}/app-release.apk` and write
+   `${APP_RELEASES_DIR}/version.json` as `{"versionCode": N,
+   "versionName": "..."}`, both atomically (temp file + rename), on the
+   pwm-app host.
+4. Copy `scripts/.env.example` to `scripts/.env`, fill in `DEPLOY_SSH_HOST`
    (your SSH target for pwm-app) and `DEPLOY_REMOTE_DIR` (must match
    `APP_RELEASES_DIR` above). Gitignored, never committed.
-4. Run:
+5. Run:
    ```bash
    ./scripts/deploy-apk.sh \
      packages/mobile/android/app/build/outputs/apk/release/app-release.apk \
