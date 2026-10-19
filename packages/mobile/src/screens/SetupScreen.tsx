@@ -2,18 +2,25 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Alert } from 'react-native';
 import { Button } from '../components/Button';
 import { TextField } from '../components/TextField';
-import { runSetupKeyDerivation, type SetupResult } from '../services/cryptoFlows';
-import { createBootstrapApiClient } from '../services/apiClient';
+import {
+  runSetupKeyDerivation,
+  deriveKeysFromPassword,
+  unwrapVaultKeyFromPassword,
+  decryptVaultBlob,
+  type SetupResult,
+} from '../services/cryptoFlows';
+import { createBootstrapApiClient, createSessionApiClient } from '../services/apiClient';
 import {
   getBootstrapBaseUrl,
   setBootstrapBaseUrl,
+  getServerBaseUrl,
   getPendingSetupSession,
   setPendingSetupSession,
   clearPendingSetupSession,
   type PendingSetupSession,
 } from '../services/config';
 import { cacheSessionForBiometricUnlock } from '../services/sessionCache';
-import { bytesToBase64 } from '../native/base64';
+import { bytesToBase64, base64ToBytes } from '../native/base64';
 import { generateCsr, installCert } from '../native/mtlsClient';
 import { useAuthStore } from '../state/authStore';
 import { useVaultStore } from '../state/vaultStore';
@@ -38,6 +45,13 @@ export function SetupScreen() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [accountError, setAccountError] = useState<string | undefined>();
+
+  // "I already have an account" -- re-pairs THIS device to an existing
+  // account (e.g. after a reinstall wiped its client cert) instead of
+  // registering a new one, which would 409 on the already-taken
+  // username. See docs/DECISIONS.md. No recovery-key step in this mode
+  // -- the account already has one; this just needs a fresh device cert.
+  const [mode, setMode] = useState<'newAccount' | 'existingAccount'>('newAccount');
 
   const [setupResult, setSetupResult] = useState<SetupResult | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -82,11 +96,11 @@ export function SetupScreen() {
       setAccountError('username is required');
       return;
     }
-    if (password.length < 8) {
+    if (mode === 'newAccount' && password.length < 8) {
       setAccountError('master password must be at least 8 characters');
       return;
     }
-    if (password !== confirmPassword) {
+    if (mode === 'newAccount' && password !== confirmPassword) {
       setAccountError('passwords do not match');
       return;
     }
@@ -97,6 +111,12 @@ export function SetupScreen() {
       if (trimmedBootstrapUrl.length > 0) {
         await setBootstrapBaseUrl(trimmedBootstrapUrl);
       }
+
+      if (mode === 'existingAccount') {
+        await handleExistingAccountRepair();
+        return;
+      }
+
       const result = await runSetupKeyDerivation(username.trim(), password);
       setSetupResult(result);
       setStep('recoveryDisplay');
@@ -161,6 +181,86 @@ export function SetupScreen() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  /**
+   * "I already have an account" path -- verifies the password and gets
+   * this device a fresh client cert in one call
+   * (certInitialForExistingUser), then fetches and decrypts the REAL
+   * existing vault (unlike finishCertInitialAndLogin's new-account path,
+   * which seeds an empty vault -- this account already has real data).
+   * No recovery-key display/confirm step: the account already has one
+   * from when it was first created.
+   */
+  async function handleExistingAccountRepair(): Promise<void> {
+    const bootstrapBaseUrl = await getBootstrapBaseUrl();
+    if (!bootstrapBaseUrl) {
+      throw new Error(
+        'bootstrap server address not configured -- connect to your home LAN/VPN first',
+      );
+    }
+    const trimmedUsername = username.trim();
+    const bootstrapApi = createBootstrapApiClient({ baseUrl: bootstrapBaseUrl });
+
+    const params = await bootstrapApi.getLoginParams(trimmedUsername);
+    const clientSalt = base64ToBytes(params.clientSalt);
+    const { authKey, vaultWrapKey } = await deriveKeysFromPassword(
+      password,
+      clientSalt,
+      params.kdfParams,
+    );
+
+    const { csr, deviceCn, tempAlias } = await generateCsr();
+    const repairResult = await bootstrapApi.certInitialForExistingUser({
+      username: trimmedUsername,
+      authHash: bytesToBase64(authKey),
+      csr,
+      deviceCn,
+    });
+    await installCert(tempAlias, repairResult.cert, repairResult.certId);
+
+    const vaultKey = unwrapVaultKeyFromPassword(
+      trimmedUsername,
+      vaultWrapKey,
+      repairResult.wrappedVaultKeyPassword,
+    );
+
+    // Cert is installed now -- the public mTLS listener is reachable,
+    // same as LoginScreen.tsx's post-login fetch.
+    const serverBaseUrl = await getServerBaseUrl();
+    if (!serverBaseUrl) {
+      throw new Error('server address not configured');
+    }
+    const apiWithSession = createSessionApiClient({
+      baseUrl: serverBaseUrl,
+      sessionToken: repairResult.sessionToken,
+    });
+    const vault = await apiWithSession.getVault();
+    const blob = decryptVaultBlob(
+      vault.encryptedBlob,
+      vaultKey,
+      repairResult.userId,
+      vault.blobFormatVersion,
+    );
+    setEntries(blob.entries, vault.revision);
+
+    await cacheSessionForBiometricUnlock(
+      {
+        vaultKey,
+        sessionToken: repairResult.sessionToken,
+        userId: repairResult.userId,
+        username: trimmedUsername,
+      },
+      'Confirm to secure your vault',
+    );
+
+    setVaultKey(vaultKey);
+    setSession({
+      sessionToken: repairResult.sessionToken,
+      userId: repairResult.userId,
+      username: trimmedUsername,
+    });
+    setScreen('vaultList');
   }
 
   /**
@@ -259,7 +359,15 @@ export function SetupScreen() {
   if (step === 'account') {
     return (
       <ScrollView contentContainerStyle={styles.container}>
-        <Text style={styles.title}>Create your account</Text>
+        <Text style={styles.title}>
+          {mode === 'newAccount' ? 'Create your account' : 'Set up this device'}
+        </Text>
+        {mode === 'existingAccount' ? (
+          <Text style={styles.body}>
+            Enter your existing account&apos;s username and master password to get this device a new
+            certificate.
+          </Text>
+        ) : null}
         <TextField
           label="Username"
           value={username}
@@ -273,14 +381,31 @@ export function SetupScreen() {
           onChangeText={setPassword}
           secureTextEntry
         />
-        <TextField
-          label="Confirm master password"
-          value={confirmPassword}
-          onChangeText={setConfirmPassword}
-          secureTextEntry
-          error={accountError}
+        {mode === 'newAccount' ? (
+          <TextField
+            label="Confirm master password"
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+            secureTextEntry
+            error={accountError}
+          />
+        ) : accountError ? (
+          <Text style={styles.errorText}>{accountError}</Text>
+        ) : null}
+        <Button
+          title={mode === 'newAccount' ? 'Continue' : 'Set up device'}
+          onPress={handleAccountStepSubmit}
+          disabled={submitting}
         />
-        <Button title="Continue" onPress={handleAccountStepSubmit} disabled={submitting} />
+        <Text
+          style={styles.advancedLink}
+          onPress={() => {
+            setMode(mode === 'newAccount' ? 'existingAccount' : 'newAccount');
+            setAccountError(undefined);
+          }}
+        >
+          {mode === 'newAccount' ? 'I already have an account' : 'Create a new account instead'}
+        </Text>
         {showServerField ? (
           <TextField
             label="Bootstrap server address (advanced)"

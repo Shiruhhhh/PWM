@@ -13,9 +13,9 @@
 # {$PWM_PUBLIC_HOST} must be set to the real DDNS hostname (see root
 # .env.example) — Caddy uses it to request/renew a Let's Encrypt cert.
 
-# Public listener, port 443, full mTLS. Everything EXCEPT /register and
-# /cert/initial — those two routes also exist in the same Fastify app
-# (Fastify itself has no listener concept; Caddy is what separates
+# Public listener, port 443, full mTLS. Everything EXCEPT the
+# bootstrap-only routes below -- those also exist in the same Fastify
+# app (Fastify itself has no listener concept; Caddy is what separates
 # them), so this block explicitly denies them here as defense in depth,
 # on top of the Proxmox firewall rule that keeps this listener's
 # underlying port reachable from the internet while the LAN-only
@@ -28,7 +28,13 @@
 		}
 	}
 
-	@bootstrapOnlyRoutes path /register /cert/initial
+	# /login/params and /cert/initial-for-existing-user added alongside
+	# the original /register + /cert/initial pair -- the device-re-pairing
+	# flow (docs/DECISIONS.md) needs login params (clientSalt/kdfParams)
+	# to derive the right authHash before it can call
+	# /cert/initial-for-existing-user, same two-step shape /login's own
+	# flow already uses on the public listener.
+	@bootstrapOnlyRoutes path /register /cert/initial /login/params /cert/initial-for-existing-user
 
 	# `route` forces explicit top-to-bottom order -- Caddy's default
 	# directive-type precedence runs `respond` before `reverse_proxy`
@@ -56,8 +62,8 @@
 # brand-new device has no cert yet, that's the whole point. Reachability
 # is restricted entirely by the Proxmox firewall (192.168.1.0/24 only,
 # never port-forwarded on the router — see docs/PROXMOX_NETWORK.md), not
-# by anything in this Caddy config itself. Hosts ONLY /register and
-# /cert/initial; everything else 404s here as defense in depth, on top
+# by anything in this Caddy config itself. Hosts ONLY the bootstrap-only
+# routes below; everything else 404s here as defense in depth, on top
 # of the firewall-level restriction.
 #
 # No hostname here (bare port, not a domain), so Caddy can't request a
@@ -70,7 +76,11 @@
 :8443 {
 	tls /etc/pwm/bootstrap-server.crt /etc/pwm/bootstrap-server.key
 
-	@bootstrapOnlyRoutes path /register /cert/initial
+	# /login/params + /cert/initial-for-existing-user: re-pairs a device
+	# to an EXISTING account (e.g. after a reinstall wiped the previous
+	# cert) without going through /register, which 409s on the already-
+	# taken username. See docs/DECISIONS.md.
+	@bootstrapOnlyRoutes path /register /cert/initial /login/params /cert/initial-for-existing-user
 
 	# Same explicit-ordering reasoning as the public listener above:
 	# `respond` runs before `reverse_proxy` by default regardless of

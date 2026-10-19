@@ -140,6 +140,36 @@ export const certInitialResponseSchema = z.object({
 });
 export type CertInitialResponse = z.infer<typeof certInitialResponseSchema>;
 
+// POST /cert/initial-for-existing-user (LAN/VPN-only listener, no
+// session required -- the password IS the credential, same as /login).
+// Re-pairs a device to an EXISTING account that has no client cert yet
+// (e.g. after an app reinstall wiped the Keystore-backed cert), without
+// going through /register (which would 409 on the already-taken
+// username, or risk a duplicate/disconnected account if it somehow
+// didn't). Verifies the password exactly like /login, then issues a
+// cert exactly like /cert/initial, in one call -- see docs/DECISIONS.md.
+export const certInitialForExistingUserRequestSchema = z.object({
+  username: z.string(),
+  authHash: z.string(), // base64
+  csr: z.string(),
+  deviceCn: z.string().min(1),
+});
+export type CertInitialForExistingUserRequest = z.infer<
+  typeof certInitialForExistingUserRequestSchema
+>;
+
+export const certInitialForExistingUserResponseSchema = z.object({
+  sessionToken: z.string(),
+  expiresAt: z.string().datetime(),
+  wrappedVaultKeyPassword: z.string(), // base64
+  userId: z.string().uuid(),
+  cert: z.string(),
+  certId: z.string().uuid(),
+});
+export type CertInitialForExistingUserResponse = z.infer<
+  typeof certInitialForExistingUserResponseSchema
+>;
+
 // PATCH /admin/registration
 export const adminRegistrationRequestSchema = z.object({
   open: z.boolean(),

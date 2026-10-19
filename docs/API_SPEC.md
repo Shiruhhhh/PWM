@@ -136,6 +136,26 @@ Body: `{ csr, deviceCn }`
 - After this call succeeds and the cert is installed, the device uses the public mTLS
   listener (port 443) for everything from then on — no further LAN/VPN requirement.
 
+### `POST /cert/initial-for-existing-user` (LAN/VPN-only listener, no session required)
+Body: `{ username, authHash, csr, deviceCn }`
+- Re-pairs a device to an **existing** account that has no client cert on this device yet
+  (e.g. a fresh app install/reinstall after the previous one's Keystore-backed cert was
+  wiped) — without going through `/register`, which `409`s on the already-taken username.
+  Not a general-purpose login route; exists narrowly for "prove you know this account's
+  password, get this device a cert," nothing else. `/login` itself stays exclusively
+  mTLS-gated, untouched.
+- Verifies the password exactly like `/login` (recompute `Argon2id(authHash,
+  storedServerSalt)`, constant-time compare), then issues a cert exactly like
+  `/cert/initial`, in one call. Same generic `401` on any auth failure (username missing
+  or hash mismatch) as every other auth route.
+- Client needs `clientSalt`/`kdfParams` to derive `authHash` first — `GET /login/params`
+  is also reachable on this listener for that reason (same two-step shape `/login`'s own
+  flow uses on the public listener).
+- Returns: `{ sessionToken, expiresAt, wrappedVaultKeyPassword, userId, cert, certId }` —
+  the combined shape of `/login`'s and `/cert/initial`'s responses, so the client can go
+  straight to fetching the real vault afterward, same as any other successful login.
+- Same rate limiting as `/login` (same brute-force exposure class).
+
 ## Admin endpoints (public mTLS listener, `is_admin` required)
 
 Per `docs/DECISIONS.md` #22: no hardcoded/default admin account. The first registered

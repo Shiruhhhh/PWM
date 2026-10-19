@@ -15,6 +15,8 @@ import type {
   CertRevokeRequest,
   CertInitialRequest,
   CertInitialResponse,
+  CertInitialForExistingUserRequest,
+  CertInitialForExistingUserResponse,
   AdminRegistrationRequest,
   AdminUsersResponse,
   AdminSetUserAdminRequest,
@@ -93,8 +95,22 @@ export function createBootstrapApiClient(config: BootstrapApiClientConfig) {
     register: (body: RegisterRequest): Promise<RegisterResponse> =>
       bootstrapRequest(config, '/register', { method: 'POST', body }),
 
+    // Needed by the re-pair flow (certInitialForExistingUser below) to
+    // get clientSalt/kdfParams before it can derive the right authHash
+    // -- same two-step shape /login's own flow uses on the public
+    // listener, just over the bootstrap one since there's no cert yet.
+    getLoginParams: (username: string): Promise<LoginParamsResponse> =>
+      bootstrapRequest(config, `/login/params?username=${encodeURIComponent(username)}`, {
+        method: 'GET',
+      }),
+
     certInitial: (body: CertInitialRequest): Promise<CertInitialResponse> =>
       bootstrapRequest(config, '/cert/initial', { method: 'POST', body }),
+
+    certInitialForExistingUser: (
+      body: CertInitialForExistingUserRequest,
+    ): Promise<CertInitialForExistingUserResponse> =>
+      bootstrapRequest(config, '/cert/initial-for-existing-user', { method: 'POST', body }),
   };
 }
 

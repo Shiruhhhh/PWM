@@ -839,3 +839,107 @@ describe('GET /app/version and GET /app/apk', () => {
     }
   });
 });
+
+describe('POST /cert/initial-for-existing-user', () => {
+  const username = `frank-${Date.now()}`;
+  const password = 'frank-password-123';
+  let authKey: Uint8Array;
+
+  beforeAll(async () => {
+    const derived = await deriveKeys(username, password);
+    authKey = derived.authKey;
+    const wrappedByPassword = wrapVaultKey(derived.vaultKey, derived.vaultWrapKey, username);
+    const wrappedByRecovery = wrapVaultKey(derived.vaultKey, generateRecoveryKey(), username);
+
+    await ctx.app.inject({
+      method: 'POST',
+      url: '/register',
+      payload: {
+        username,
+        clientSalt: Buffer.from(CLIENT_SALT).toString('base64'),
+        kdfParams: KDF_PARAMS,
+        authHash: Buffer.from(authKey).toString('base64'),
+        wrappedVaultKeyPassword: Buffer.from(wrappedByPassword).toString('base64'),
+        wrappedVaultKeyRecovery: Buffer.from(wrappedByRecovery).toString('base64'),
+      },
+    });
+  });
+
+  it('re-pairs a new device to an existing account: verifies password, issues a cert, and returns a usable session', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/cert/initial-for-existing-user',
+      payload: {
+        username,
+        authHash: Buffer.from(authKey).toString('base64'),
+        csr: 'FAKE_CSR_PEM',
+        deviceCn: 'frank-device-2',
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.sessionToken).toBeTruthy();
+    expect(body.userId).toBeTruthy();
+    expect(body.cert).toContain('frank-device-2');
+    expect(body.certId).toBeTruthy();
+
+    // The returned session actually works for session-required routes.
+    const vaultRes = await ctx.app.inject({
+      method: 'GET',
+      url: '/vault',
+      headers: { authorization: `Bearer ${body.sessionToken}` },
+    });
+    expect(vaultRes.statusCode).toBe(200);
+  });
+
+  it('rejects a wrong password with a generic 401, same shape as /login', async () => {
+    const wrongPassword = await deriveKeys(username, 'totally-wrong-password');
+
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/cert/initial-for-existing-user',
+      payload: {
+        username,
+        authHash: Buffer.from(wrongPassword.authKey).toString('base64'),
+        csr: 'FAKE_CSR_PEM',
+        deviceCn: 'frank-device-3',
+      },
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'invalid credentials' });
+  });
+
+  it('rejects an unknown username with the same generic 401 (no enumeration)', async () => {
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/cert/initial-for-existing-user',
+      payload: {
+        username: `nonexistent-${Date.now()}`,
+        authHash: Buffer.from(authKey).toString('base64'),
+        csr: 'FAKE_CSR_PEM',
+        deviceCn: 'ghost-device',
+      },
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({ error: 'invalid credentials' });
+  });
+
+  it('does not require an existing session (unlike /cert/initial)', async () => {
+    // No authorization header at all -- this route's whole point is
+    // working for a device with no session/cert yet.
+    const res = await ctx.app.inject({
+      method: 'POST',
+      url: '/cert/initial-for-existing-user',
+      payload: {
+        username,
+        authHash: Buffer.from(authKey).toString('base64'),
+        csr: 'FAKE_CSR_PEM',
+        deviceCn: 'frank-device-4',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+});

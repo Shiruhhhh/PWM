@@ -762,3 +762,48 @@ pass" — consistent with every other real bug found this session (#25-33). Full
 verified working afterward: old build → in-place update preserving all local data →
 server-reports-newer detection → banner (correctly positioned) → tap-to-update →
 download → install → data still present.
+
+### 35. No way for an existing account's device to get a fresh client cert without `/register` — new `/cert/initial-for-existing-user` route
+Found via a real self-inflicted scenario during Phase 7's device testing: Android
+correctly refuses to install a lower `versionCode` over a higher one already installed
+(`INSTALL_FAILED_VERSION_DOWNGRADE`), so testing an older build required an actual
+uninstall. That wiped the device's Keystore-backed client cert — on relaunch, with no
+cert installed, `App.tsx`'s cold-start check routes straight to `SetupScreen`, which only
+ever supported registering a brand-new account. Re-registering under the same username
+would `409` (`/register`'s own "username taken" check); there was no path at all for "I
+have an account already, this device just needs pairing."
+
+Root cause: the LAN-only `:8443` listener only ever hosted `/register` and `/cert/initial`
+(per #22) — both assume a brand-new account. `/login` is deliberately scoped to the
+mTLS-only `:443` listener ("only ever serves devices that already have a client cert," per
+API_SPEC.md), so a cert-less device genuinely has no way to prove it owns an existing
+account.
+
+Two designs discussed with the user; chosen: a **new, narrowly-scoped LAN-only route**
+(`POST /cert/initial-for-existing-user`) rather than exposing `/login` itself on the
+bootstrap listener — keeps `/login`'s own threat model/placement untouched, and keeps the
+bootstrap listener's routes purpose-specific (new account / re-cert existing account),
+not a general-purpose auth surface.
+
+- [x] `packages/server/src/routes/certInitialForExistingUser.ts` — verifies the password
+  exactly like `/login` (same Argon2id recompute + constant-time compare, same generic
+  401 on any failure, no enumeration), then issues a cert exactly like `/cert/initial`, in
+  one call. Same rate limit class as `/login`. New
+  `certInitialForExistingUserRequestSchema`/`...ResponseSchema` in `@pwm/core`.
+- [x] `GET /login/params` added to BOTH listeners' bootstrap-only path allowlist in
+  `infra/Caddyfile` (it already existed in the Fastify app globally, just was never
+  reachable on `:8443` — Caddy's path matcher gates it) — the client needs
+  `clientSalt`/`kdfParams` to derive the right `authHash` before calling the new route,
+  same two-step shape `/login`'s own flow already uses.
+- [x] `SetupScreen.tsx` gains an "I already have an account" mode toggle on the account
+  step — same username/password fields, no recovery-key display/confirm step (the account
+  already has one from when it was first created), calls the new endpoint instead of
+  `/register`, then fetches and decrypts the REAL existing vault (not an empty one --
+  `finishCertInitialAndLogin`'s new-account path seeds `setEntries([], 0)`, which would
+  have silently wiped the user's view of their own data if reused here).
+- 4 new server-side tests: successful re-pair + usable session, wrong password (generic
+  401), unknown username (generic 401, no enumeration), confirms no session is required
+  (unlike `/cert/initial`).
+- Not yet exercised on the real device this was found on — written and tested but the
+  user's phone is still in the broken state as of this writeup; next step is installing a
+  build with this fix and actually using it to recover.

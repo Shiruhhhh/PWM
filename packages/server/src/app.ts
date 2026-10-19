@@ -15,6 +15,7 @@ import { registerRecoveryPasswordChangeRoute } from './routes/recoveryPasswordCh
 import { registerCertRenewRoute } from './routes/certRenew.js';
 import { registerCertRevokeRoute } from './routes/certRevoke.js';
 import { registerCertInitialRoute } from './routes/certInitial.js';
+import { registerCertInitialForExistingUserRoute } from './routes/certInitialForExistingUser.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerAppVersionRoute } from './routes/appVersion.js';
 import { registerAppApkRoute } from './routes/appApk.js';
@@ -102,6 +103,7 @@ export function buildApp(options: BuildAppOptions = {}): App {
   registerCertRenewRoute(app, caClient);
   registerCertRevokeRoute(app, caClient);
   registerCertInitialRoute(app, caClient);
+  registerCertInitialForExistingUserRoute(app, caClient);
   registerAdminRoutes(app, caClient);
   registerAppVersionRoute(app);
   registerAppApkRoute(app);
