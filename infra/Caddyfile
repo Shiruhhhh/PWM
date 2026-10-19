@@ -28,13 +28,14 @@
 		}
 	}
 
-	# /login/params and /cert/initial-for-existing-user added alongside
-	# the original /register + /cert/initial pair -- the device-re-pairing
-	# flow (docs/DECISIONS.md) needs login params (clientSalt/kdfParams)
-	# to derive the right authHash before it can call
-	# /cert/initial-for-existing-user, same two-step shape /login's own
-	# flow already uses on the public listener.
-	@bootstrapOnlyRoutes path /register /cert/initial /login/params /cert/initial-for-existing-user
+	# /login/params is NOT in this deny-list -- it's a normal public-
+	# listener route (LoginScreen's own flow uses it over mTLS every
+	# time), always has been. Only /cert/initial-for-existing-user is
+	# added here alongside /register + /cert/initial: a device that
+	# already has a valid cert (i.e. can reach this listener at all)
+	# never needs the no-cert re-pairing flow, so denying it here is
+	# correct defense in depth, same reasoning as the other two.
+	@bootstrapOnlyRoutes path /register /cert/initial /cert/initial-for-existing-user
 
 	# `route` forces explicit top-to-bottom order -- Caddy's default
 	# directive-type precedence runs `respond` before `reverse_proxy`

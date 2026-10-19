@@ -804,6 +804,23 @@ not a general-purpose auth surface.
 - 4 new server-side tests: successful re-pair + usable session, wrong password (generic
   401), unknown username (generic 401, no enumeration), confirms no session is required
   (unlike `/cert/initial`).
-- Not yet exercised on the real device this was found on — written and tested but the
-  user's phone is still in the broken state as of this writeup; next step is installing a
-  build with this fix and actually using it to recover.
+- Exercised on the real device this was found on — the re-pair flow itself worked,
+  recovered the account successfully. But that same change introduced a real regression,
+  caught immediately after: `infra/Caddyfile`'s public-listener matcher
+  (`@bootstrapOnlyRoutes`) got `/login/params` added to its **deny** list by mistake,
+  alongside the two routes that genuinely belong there. `/login/params` is a normal
+  public-listener route — `LoginScreen.tsx`'s own flow calls it over mTLS every time — so
+  this broke ordinary login for every device with a cert, immediately after fixing the
+  no-cert case. Root cause: conflating "needs adding to the LAN-only listener's allowlist"
+  (correct, `/login/params` wasn't reachable there before) with "needs adding to the
+  public listener's deny-list too" (wrong — only `/cert/initial-for-existing-user`
+  belongs on that deny-list; a device that can reach the public listener at all already
+  has a valid cert and never needs the no-cert recovery route).
+- [x] Fixed: `/login/params` removed from the public listener's `@bootstrapOnlyRoutes`
+  matcher — it's not a bootstrap-only route there, never was. Only
+  `/cert/initial-for-existing-user` is denied on `:443`. Confirmed via a real login after
+  the fix deployed.
+- Process note: editing the same named matcher in two site blocks for two different
+  purposes (add here, add there for a different reason) is an easy way to accidentally
+  conflate them — worth a comment on each block's matcher spelling out exactly what
+  belongs there and why, which is what both blocks now have.
