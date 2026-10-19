@@ -11,6 +11,11 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     ports:
+      # 80 is required for Let's Encrypt's http-01 challenge and Caddy's
+      # automatic HTTP->HTTPS redirect, even though the app is served on
+      # 443 -- not optional, ACME fails without it regardless of public
+      # app port.
+      - '80:80'
       - '443:443'
       - '8443:8443'
     volumes:
