@@ -1,20 +1,36 @@
 # PWM — Deploy & CI/CD Spec
 
+## Reverse proxy (pwm-proxy, CT 200) deployment
+
+Per `docs/DECISIONS.md`'s reverse-proxy migration entry — Caddy no longer runs on
+pwm-app. It runs on its own shared LXC, `pwm-proxy`, since a router can only forward port
+443 to one internal IP and this host fronts more than one self-hosted project.
+
+- `infra/caddy/docker-compose.yml` — one service, `caddy`. Exposes both 443 (public) and
+  8443 (LAN-only, per `docs/DECISIONS.md` #22's two-listener design — the Proxmox
+  firewall, not Caddy or Docker, is what actually keeps 8443 off the public internet).
+  Trusts the internal CA via a bind mount of the host's `/etc/pwm-proxy-cert/ca.crt` into
+  `/etc/pwm/ca.crt`, matching `infra/caddy/Caddyfile`'s `trust_pool file` path.
+- `infra/caddy/Caddyfile` reverse-proxies to pwm-app over the LAN
+  (`192.168.1.10:3000`) — a real network hop, not Docker Compose service-name
+  resolution, since Caddy and `node-app` no longer share a Docker network.
+- Deploy: copy `infra/caddy/` to pwm-proxy, fill in its own `.env` (`PWM_PUBLIC_HOST`,
+  same value as pwm-app's), `docker compose up -d`.
+
 ## pwm-app deployment
 
-- **Docker**, per project decision. `docker-compose.yml` on the VM/LXC, three services:
-  - `caddy` — reverse proxy, TLS + mTLS termination. Exposes both 443 (public) and 8443
-    (LAN-only, per `docs/DECISIONS.md` #22's two-listener design — the Proxmox firewall,
-    not Caddy or Docker, is what actually keeps 8443 off the public internet). Trusts the
-    internal CA via a bind mount of the host's `/etc/pwm-app-cert/ca.crt` (placed there by
-    the CA bootstrap runbook, `services/ca/scripts/bootstrap.sh`'s step 2) into
-    `/etc/pwm/ca.crt`, matching `infra/Caddyfile`'s `trust_pool file` path.
-  - `node-app` — the Fastify backend. Also bind-mounts `/etc/pwm-app-cert` (same directory
-    Caddy reads from) read-only, and reads `CA_CLIENT_CERT_PATH`/`CA_CLIENT_KEY_PATH`/
-    `CA_TRUST_CERT_PATH` pointing into it — these are the files from the bootstrap
-    runbook's step 2 (pwm-app's own CA-signed client cert, for authenticating to pwm-ca's
-    `/sign`/`/revoke`/`/crl`), not the end-user mTLS certs (those are per-device, issued
-    at runtime via `/cert/initial`/`/cert/renew`, never baked into the container).
+- **Docker**, per project decision. `docker-compose.yml` on CT 201, two services (Caddy
+  moved out, see above):
+  - `node-app` — the Fastify backend. Bind-mounts `/etc/pwm-app-cert` read-only, and
+    reads `CA_CLIENT_CERT_PATH`/`CA_CLIENT_KEY_PATH`/`CA_TRUST_CERT_PATH` pointing into
+    it — these are the files from the CA bootstrap runbook's step 2 (pwm-app's own
+    CA-signed client cert, for authenticating to pwm-ca's `/sign`/`/revoke`/`/crl`), not
+    the end-user mTLS certs (those are per-device, issued at runtime via
+    `/cert/initial`/`/cert/renew`/`/cert/initial-for-existing-user`, never baked into the
+    container). Binds port 3000 to the host (`ports:`, not `expose:`) so pwm-proxy can
+    reach it over the LAN — firewalled to accept only from pwm-proxy's IP
+    (`docs/PROXMOX_NETWORK.md`), this is the real new attack-surface point of the
+    migration, not opened to the whole LAN.
   - `postgres` — containerized, simplest for 2-user scale; `DATABASE_URL` points at it by
     service name.
   - `node-app`'s container `CMD` runs `prisma migrate deploy` before starting the server,
@@ -70,8 +86,8 @@ Per `BACKUP.md` / `MONITORING.md`. Done once, as part of this deployment (see `T
 **Explicitly skipped for v1** — user's call, not doing external uptime monitoring at this scale right now. `MONITORING.md`'s guidance (point a free external monitor at `/health` over the public mTLS listener, expect a TLS handshake failure rather than 200 as the "server up" signal since there's no client cert to present) stays documented there if revisited later.
 
 ### Log rotation
-- `infra/pwm-logrotate.conf` installed at `/etc/logrotate.d/pwm` on pwm-app.
-- `infra/Caddyfile`'s two `log` blocks write to `/var/log/caddy/*.log` inside the Caddy container — `docker-compose.yml` bind-mounts that path to the host (`/var/log/caddy`) so logrotate can actually reach the files and they survive a container recreate. (This bind mount was missing originally — logs were being silently discarded on every recreate until fixed.)
+- `infra/pwm-logrotate.conf` installed at `/etc/logrotate.d/pwm` on **pwm-proxy** (post-migration — Caddy's logs live there now, not pwm-app).
+- `infra/caddy/Caddyfile`'s two `log` blocks write to `/var/log/caddy/*.log` inside the Caddy container — `infra/caddy/docker-compose.yml` bind-mounts that path to the host (`/var/log/caddy`) so logrotate can actually reach the files and they survive a container recreate.
 
 ## Releasing an app update (in-app update mechanism, Phase 7)
 

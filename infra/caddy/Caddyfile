@@ -1,17 +1,25 @@
-# PWM Caddy config — TWO separate listeners on pwm-app, per
-# docs/DECISIONS.md #22 and docs/API_SPEC.md. Both point at the same
-# Fastify app, but client-cert verification happens at the TLS layer,
-# before Caddy can route by HTTP path — so this genuinely needs two
-# site blocks on two different bind addresses/ports, not a path rule on
-# one listener.
+# PWM Caddy config — TWO separate listeners, per docs/DECISIONS.md #22
+# and docs/API_SPEC.md. Both point at the same Fastify app, but
+# client-cert verification happens at the TLS layer, before Caddy can
+# route by HTTP path — so this genuinely needs two site blocks on two
+# different bind addresses/ports, not a path rule on one listener.
+#
+# Runs on pwm-proxy (CT 200), NOT pwm-app (CT 201) -- per
+# docs/DECISIONS.md's reverse-proxy migration entry, Caddy moved to a
+# shared LXC since the router can only forward port 443 to one internal
+# IP, and a second project needs it too. reverse_proxy targets below
+# point at pwm-app's LAN IP (192.168.1.10:3000) over the network, not a
+# Docker Compose service name -- these two containers no longer share a
+# Docker network.
 #
 # NOTE: stock Caddy's client_auth only verifies a cert chains to the
 # trusted CA — it has no CRL/revocation support. A *revoked* cert still
 # passes this check and gets rejected one layer up, by the app (see
 # docs/CA_SERVICE_SPEC.md and docs/DECISIONS.md #17).
 #
-# {$PWM_PUBLIC_HOST} must be set to the real DDNS hostname (see root
-# .env.example) — Caddy uses it to request/renew a Let's Encrypt cert.
+# {$PWM_PUBLIC_HOST} must be set to the real subdomain
+# (pwm.<your-ddns-host>, see root .env.example) — Caddy uses it to
+# request/renew a Let's Encrypt cert.
 
 # Public listener, port 443, full mTLS. Everything EXCEPT the
 # bootstrap-only routes below -- those also exist in the same Fastify
@@ -43,7 +51,7 @@
 	# every request (matched or not) if these weren't wrapped like this.
 	route {
 		respond @bootstrapOnlyRoutes 404
-		reverse_proxy node-app:3000 {
+		reverse_proxy 192.168.1.10:3000 {
 			# Forward the verified client cert (DER, base64, RFC 9440
 			# Client-Cert format) so the app can compute its fingerprint and
 			# check it against the CRL — Caddy only verifies the cert chains
@@ -88,7 +96,7 @@
 	# matchers, so without `route` the unconditional 404 below would fire
 	# for every request, including the two allowed paths.
 	route {
-		reverse_proxy @bootstrapOnlyRoutes node-app:3000
+		reverse_proxy @bootstrapOnlyRoutes 192.168.1.10:3000
 		respond 404
 	}
 

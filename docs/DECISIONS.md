@@ -824,3 +824,46 @@ not a general-purpose auth surface.
   purposes (add here, add there for a different reason) is an easy way to accidentally
   conflate them — worth a comment on each block's matcher spelling out exactly what
   belongs there and why, which is what both blocks now have.
+
+### 36. Caddy moved off pwm-app to a shared reverse-proxy LXC (pwm-proxy, CT 200)
+Not a PWM-internal decision — it came out of planning a second, unrelated self-hosted
+project (Mirai, separate repo) that also needs port 443. A home router can only forward
+one external port to one internal IP; two independent apps each wanting their own
+Caddy-on-443 setup can't both have it. Resolved: a shared reverse-proxy LXC in front of
+both, each app keeping its own backend container(s) behind it, no TLS termination of
+their own anymore.
+
+- [x] New LXC `pwm-proxy` (CT 200, `192.168.1.12`), Docker-in-LXC, same pattern as
+  pwm-app/pwm-ca.
+- [x] Caddy's config moved from `infra/Caddyfile` to `infra/caddy/Caddyfile` +
+  `infra/caddy/docker-compose.yml` — its own deploy unit now, separate from pwm-app's
+  (repo-root `docker-compose.yml`, now just `node-app` + `postgres`).
+- [x] `reverse_proxy node-app:3000` (Docker Compose service-name resolution, worked only
+  because Caddy and node-app shared a Docker network) → `reverse_proxy
+  192.168.1.10:3000` (a real LAN hop, Caddy and node-app are on different hosts now).
+  node-app's own `docker-compose.yml` entry changed from `expose: ['3000']`
+  (container-network-only) to `ports: ['3000:3000']` (bound to the CT 201 host) so
+  pwm-proxy can actually reach it — this is the real new attack-surface point of the
+  migration, so it's firewalled to accept only from pwm-proxy's IP
+  (`docs/PROXMOX_NETWORK.md`), not opened to the whole LAN.
+- [x] PWM moved off the bare DDNS domain onto its own subdomain, `pwm.<ddns-host>` —
+  `PWM_PUBLIC_HOST` updated in `.env.example`, a CNAME already created riding on the same
+  dynamic-DNS updates the bare domain gets.
+- [x] Cert bind mounts (`ca.crt`, `bootstrap-server.crt`/`.key`) move from
+  `/etc/pwm-app-cert/` on CT 201 to `/etc/pwm-proxy-cert/` on CT 200 — Caddy needs them
+  wherever Caddy actually runs now.
+- [x] `docs/PROXMOX_NETWORK.md` rewritten to reflect the real deployed topology (it had
+  gone stale since initial deployment — still described pwm-app/pwm-ca as "planned
+  additions" months after they were live) and the new CT 200 entry.
+- [ ] Mobile app's baked-in `SERVER_URL`/`BOOTSTRAP_URL` (Phase 5/7's `.env`/
+  react-native-config work) need updating to the new subdomain + pwm-proxy's IP, then a
+  rebuild/redeploy — deliberately held off until pwm-proxy's Caddy is actually confirmed
+  working, so the currently-installed, currently-working app on the user's phone isn't
+  pointed at infrastructure that doesn't exist yet.
+- [ ] Router's port-forward needs flipping from `192.168.1.10:443` to
+  `192.168.1.12:443` — a live, user-confirmed-before-applying change
+  (`docs/PROXMOX_NETWORK.md`), not yet done as of this entry.
+- [ ] Full mTLS chain not yet re-verified end-to-end post-migration on a real device —
+  real surgery on a working, tested deployment, same verification bar as every other
+  milestone this session. Pending pwm-proxy's Caddy actually being live and the router
+  flip.

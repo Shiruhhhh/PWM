@@ -1,0 +1,29 @@
+# Reverse proxy for pwm-app, runs on pwm-proxy (CT 200) -- per
+# docs/DECISIONS.md's reverse-proxy migration entry. Deploy this
+# directory's contents to CT 200 (not the repo-root docker-compose.yml,
+# which is pwm-app/CT 201's own app+db stack).
+#
+# Manual `docker compose up -d` deploy, same pattern as the rest of the
+# project.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - '443:443'
+      - '8443:8443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - /etc/pwm-proxy-cert/ca.crt:/etc/pwm/ca.crt:ro
+      - /etc/pwm-proxy-cert/bootstrap-server.crt:/etc/pwm/bootstrap-server.crt:ro
+      - /etc/pwm-proxy-cert/bootstrap-server.key:/etc/pwm/bootstrap-server.key:ro
+      - /var/log/caddy:/var/log/caddy
+    environment:
+      - PWM_PUBLIC_HOST=${PWM_PUBLIC_HOST}
+
+volumes:
+  caddy_data:
+  caddy_config:

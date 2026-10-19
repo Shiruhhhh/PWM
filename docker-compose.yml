@@ -1,26 +1,10 @@
-# pwm-app deployment per docs/DEPLOY.md: caddy + node-app + postgres.
-# Manual `docker compose pull && docker compose up -d` deploy, per spec.
+# pwm-app deployment per docs/DEPLOY.md: node-app + postgres only.
+# Caddy (TLS termination, both listeners) moved to pwm-proxy (CT 200) --
+# see infra/caddy/docker-compose.yml and docs/DECISIONS.md's
+# reverse-proxy migration entry. Manual `docker compose pull && docker
+# compose up -d` deploy, per spec.
 
 services:
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - '443:443'
-      - '8443:8443'
-    volumes:
-      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-      - /etc/pwm-app-cert/ca.crt:/etc/pwm/ca.crt:ro
-      - /etc/pwm-app-cert/bootstrap-server.crt:/etc/pwm/bootstrap-server.crt:ro
-      - /etc/pwm-app-cert/bootstrap-server.key:/etc/pwm/bootstrap-server.key:ro
-      - /var/log/caddy:/var/log/caddy
-    environment:
-      - PWM_PUBLIC_HOST=${PWM_PUBLIC_HOST}
-    depends_on:
-      - node-app
-
   node-app:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-shiruhhhh}/pwm-app:${PWM_IMAGE_TAG:-latest}
     build:
@@ -44,8 +28,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    expose:
-      - '3000'
+    # Bound to the host (not just `expose`) so pwm-proxy (CT 200) can
+    # reach it over the LAN -- Caddy no longer runs in this compose
+    # project's own Docker network. Firewalled to accept only from CT
+    # 200's IP (see docs/PROXMOX_NETWORK.md) -- this port is NOT meant
+    # to be reachable from the rest of the LAN.
+    ports:
+      - '3000:3000'
 
   postgres:
     image: postgres:17-alpine
@@ -63,6 +52,4 @@ services:
       retries: 10
 
 volumes:
-  caddy_data:
-  caddy_config:
   postgres_data:

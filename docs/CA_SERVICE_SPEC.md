@@ -45,7 +45,8 @@ checking happens at the **application layer** instead: pwm-app fetches and cache
 CRL, and a Fastify preHandler on every session-required route checks the presented
 client cert's fingerprint against it, rejecting with 401 if revoked. Caddy's
 `client_auth` config stays `require_and_verify` (trusted-CA check only) — see
-`infra/Caddyfile`.
+`infra/caddy/Caddyfile` (runs on pwm-proxy as of the reverse-proxy migration,
+`docs/DECISIONS.md`, not pwm-app).
 
 ### `GET /health`
 - Trivial liveness check, no auth needed beyond network-level isolation (nothing sensitive returned — just `{ status: "ok" }`).
